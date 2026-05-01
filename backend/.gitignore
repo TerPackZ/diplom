@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+tasktracker.db
+uploads/*
+!uploads/.gitkeep
