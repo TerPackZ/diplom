@@ -8,6 +8,8 @@ import authRoutes from './routes/auth';
 import usersRoutes from './routes/users';
 import groupsRoutes from './routes/groups';
 import tasksRoutes from './routes/tasks';
+import taskCommentsRoutes from './routes/task-comments';
+import taskAttachmentsRoutes from './routes/task-attachments';
 import friendsRoutes from './routes/friends';
 import notificationsRoutes from './routes/notifications';
 
@@ -22,7 +24,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve uploaded avatars as static files
+// Serve uploaded files as static files
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // Routes
@@ -32,6 +34,8 @@ app.use('/api/friends', friendsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/groups', groupsRoutes);
 app.use('/api/groups/:groupId/tasks', tasksRoutes);
+app.use('/api/groups/:groupId/tasks/:taskId/comments', taskCommentsRoutes);
+app.use('/api/groups/:groupId/tasks/:taskId/attachments', taskAttachmentsRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {

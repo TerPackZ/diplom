@@ -1,12 +1,15 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type { Task } from './TaskCard';
 import Avatar from './Avatar';
+import TaskComments from './TaskComments';
+import TaskAttachments from './TaskAttachments';
 
 interface TaskDetailModalProps {
   task: Task;
   canEdit: boolean;
   onEdit: (task: Task) => void;
   onClose: () => void;
+  groupId: number;
 }
 
 const PRIORITY_LABELS: Record<string, string> = {
@@ -31,7 +34,9 @@ function formatDate(dateStr: string) {
   });
 }
 
-export default function TaskDetailModal({ task, canEdit, onEdit, onClose }: TaskDetailModalProps) {
+export default function TaskDetailModal({ task, canEdit, onEdit, onClose, groupId }: TaskDetailModalProps) {
+  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'files'>('details');
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
@@ -40,7 +45,7 @@ export default function TaskDetailModal({ task, canEdit, onEdit, onClose }: Task
 
   return (
     <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" style={{ maxWidth: 520 }}>
+      <div className="modal" style={{ maxWidth: 680 }}>
         <div className="modal__header">
           <h2 className="modal__title" style={{ fontSize: 'var(--font-size-lg)', lineHeight: 1.3 }}>
             {task.title}
@@ -48,7 +53,63 @@ export default function TaskDetailModal({ task, canEdit, onEdit, onClose }: Task
           <button className="modal__close" onClick={onClose}>×</button>
         </div>
 
+        {/* Tabs */}
+        <div style={{
+          display: 'flex',
+          gap: 'var(--space-xs)',
+          borderBottom: '1px solid var(--border)',
+          padding: '0 var(--space-lg)'
+        }}>
+          <button
+            onClick={() => setActiveTab('details')}
+            style={{
+              padding: 'var(--space-sm) var(--space-md)',
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === 'details' ? '2px solid var(--primary)' : '2px solid transparent',
+              color: activeTab === 'details' ? 'var(--primary)' : 'var(--text-secondary)',
+              fontWeight: activeTab === 'details' ? 600 : 400,
+              cursor: 'pointer',
+              fontSize: 'var(--font-size-sm)'
+            }}
+          >
+            Детали
+          </button>
+          <button
+            onClick={() => setActiveTab('comments')}
+            style={{
+              padding: 'var(--space-sm) var(--space-md)',
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === 'comments' ? '2px solid var(--primary)' : '2px solid transparent',
+              color: activeTab === 'comments' ? 'var(--primary)' : 'var(--text-secondary)',
+              fontWeight: activeTab === 'comments' ? 600 : 400,
+              cursor: 'pointer',
+              fontSize: 'var(--font-size-sm)'
+            }}
+          >
+            Комментарии
+          </button>
+          <button
+            onClick={() => setActiveTab('files')}
+            style={{
+              padding: 'var(--space-sm) var(--space-md)',
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === 'files' ? '2px solid var(--primary)' : '2px solid transparent',
+              color: activeTab === 'files' ? 'var(--primary)' : 'var(--text-secondary)',
+              fontWeight: activeTab === 'files' ? 600 : 400,
+              cursor: 'pointer',
+              fontSize: 'var(--font-size-sm)'
+            }}
+          >
+            Файлы
+          </button>
+        </div>
+
         <div className="modal__body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+          {activeTab === 'details' && (
+            <>
           {/* Priority + Status badges */}
           <div style={{ display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
             <span className={`badge badge-priority-${task.priority}`}>
@@ -118,6 +179,16 @@ export default function TaskDetailModal({ task, canEdit, onEdit, onClose }: Task
               </span>
             </div>
           </div>
+            </>
+          )}
+
+          {activeTab === 'comments' && (
+            <TaskComments groupId={groupId} taskId={task.id} />
+          )}
+
+          {activeTab === 'files' && (
+            <TaskAttachments groupId={groupId} taskId={task.id} />
+          )}
         </div>
 
         <div className="modal__footer">

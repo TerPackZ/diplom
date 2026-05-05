@@ -293,6 +293,7 @@ export default function GroupPage() {
         <TaskDetailModal
           task={detailTask}
           canEdit={canEdit}
+          groupId={groupId}
           onEdit={(t) => { setDetailTask(null); setTaskModal({ open: true, task: t }); }}
           onClose={() => setDetailTask(null)}
         />
