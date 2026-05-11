@@ -108,6 +108,113 @@ db.exec(`
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL CHECK(type IN ('direct', 'group')),
+    group_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS conversation_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    UNIQUE(conversation_id, user_id),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS conversation_reads (
+    conversation_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    last_read_message_id INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (conversation_id, user_id),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS task_status_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    changed_by INTEGER,
+    changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_task_status_history_task ON task_status_history(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_status_history_changed_at ON task_status_history(changed_at);
+
+  CREATE TABLE IF NOT EXISTS board_columns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    color TEXT,
+    is_completion INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_board_columns_group ON board_columns(group_id, position);
+`);
+
+// Add column_id to tasks if not already present (SQLite migration pattern)
+const tasksCols = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
+if (!tasksCols.some(c => c.name === 'column_id')) {
+  db.exec('ALTER TABLE tasks ADD COLUMN column_id INTEGER REFERENCES board_columns(id) ON DELETE SET NULL');
+}
+
+// Backfill: default columns for groups that don't have any yet
+db.exec(`
+  INSERT INTO board_columns (group_id, name, position, color, is_completion)
+  SELECT g.id, 'К выполнению', 0, '#6B7280', 0 FROM groups g
+  WHERE NOT EXISTS (SELECT 1 FROM board_columns WHERE group_id = g.id);
+
+  INSERT INTO board_columns (group_id, name, position, color, is_completion)
+  SELECT g.id, 'В работе', 1, '#2563EB', 0 FROM groups g
+  WHERE NOT EXISTS (SELECT 1 FROM board_columns WHERE group_id = g.id AND position = 1);
+
+  INSERT INTO board_columns (group_id, name, position, color, is_completion)
+  SELECT g.id, 'Выполнено', 2, '#10B981', 1 FROM groups g
+  WHERE NOT EXISTS (SELECT 1 FROM board_columns WHERE group_id = g.id AND position = 2);
+`);
+
+// Backfill: tasks without column_id get one based on legacy status
+db.exec(`
+  UPDATE tasks SET column_id = (
+    SELECT id FROM board_columns
+    WHERE group_id = tasks.group_id
+      AND ((tasks.status = 'todo' AND position = 0)
+           OR (tasks.status = 'in_progress' AND position = 1)
+           OR (tasks.status = 'done' AND is_completion = 1))
+    LIMIT 1
+  )
+  WHERE column_id IS NULL;
+`);
+
+// Backfill: seed an initial history row for tasks that don't have any history yet
+db.exec(`
+  INSERT INTO task_status_history (task_id, from_status, to_status, changed_by, changed_at)
+  SELECT id, NULL, status, created_by, created_at
+  FROM tasks
+  WHERE NOT EXISTS (SELECT 1 FROM task_status_history h WHERE h.task_id = tasks.id);
 `);
 
 // Ensure uploads directory exists

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../context/ThemeContext';
+import { useSocket } from '../context/SocketContext';
 import Avatar from './Avatar';
 import NotificationPanel from './NotificationPanel';
 import apiClient from '../api/client';
@@ -9,23 +10,59 @@ import apiClient from '../api/client';
 export default function Navbar() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { socket } = useSocket();
   const navigate = useNavigate();
   const location = useLocation();
   const [pendingCount, setPendingCount] = useState(0);
+  const [unreadMessages, setUnreadMessages] = useState(0);
 
   const isActive = (path: string) => location.pathname === path;
 
-  // Refresh pending friend request count on every route change
+  // Load initial counts once on mount / user change
   useEffect(() => {
-    if (!user) { setPendingCount(0); return; }
+    if (!user) { setPendingCount(0); setUnreadMessages(0); return; }
     apiClient.get('/api/friends/requests')
-      .then((res) => setPendingCount(res.data.length))
-      .catch(() => setPendingCount(0));
+      .then(res => setPendingCount(res.data.length))
+      .catch(() => {});
+    apiClient.get('/api/messages/unread-count')
+      .then(res => setUnreadMessages(res.data.count ?? 0))
+      .catch(() => {});
+  }, [user]);
+
+  // Reset message unread when on /messages page
+  useEffect(() => {
+    if (location.pathname === '/messages') setUnreadMessages(0);
+  }, [location.pathname]);
+
+  // Real-time: new message → increment if not on /messages
+  useEffect(() => {
+    if (!socket) return;
+    const handler = () => {
+      if (location.pathname !== '/messages') setUnreadMessages(prev => prev + 1);
+    };
+    socket.on('new_message', handler);
+    return () => { socket.off('new_message', handler); };
+  }, [socket, location.pathname]);
+
+  // Real-time: new notification (friend request) → bump pending count
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (notif: { type: string }) => {
+      if (notif.type === 'friend_request') setPendingCount(prev => prev + 1);
+    };
+    socket.on('new_notification', handler);
+    return () => { socket.off('new_notification', handler); };
+  }, [socket]);
+
+  // When user accepts/declines a request from FriendsPage, refresh count
+  useEffect(() => {
+    if (!user || location.pathname !== '/friends') return;
+    apiClient.get('/api/friends/requests')
+      .then(res => setPendingCount(res.data.length))
+      .catch(() => {});
   }, [user, location.pathname]);
 
-  const handleUnreadChange = useCallback((_count: number) => {
-    // Could use this to do something global if needed
-  }, []);
+  const handleUnreadChange = useCallback((_count: number) => {}, []);
 
   return (
     <>
@@ -51,6 +88,16 @@ export default function Navbar() {
                 Друзья
                 {pendingCount > 0 && (
                   <span className="nav-badge">{pendingCount}</span>
+                )}
+              </button>
+              <button
+                className={`navbar__link ${isActive('/messages') ? 'active' : ''}`}
+                onClick={() => navigate('/messages')}
+                style={{ display: 'flex', alignItems: 'center' }}
+              >
+                Сообщения
+                {unreadMessages > 0 && (
+                  <span className="nav-badge">{unreadMessages > 99 ? '99+' : unreadMessages}</span>
                 )}
               </button>
             </div>
@@ -152,6 +199,21 @@ export default function Navbar() {
               )}
             </span>
             <span>Друзья</span>
+          </button>
+
+          <button
+            className={`mobile-nav__item ${isActive('/messages') ? 'active' : ''}`}
+            onClick={() => navigate('/messages')}
+          >
+            <span style={{ position: 'relative', display: 'inline-flex' }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+              {unreadMessages > 0 && (
+                <span className="mobile-nav__badge">{unreadMessages > 99 ? '99+' : unreadMessages}</span>
+              )}
+            </span>
+            <span>Чаты</span>
           </button>
 
           <button

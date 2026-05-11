@@ -1,4 +1,5 @@
 import db from '../db/database';
+import { getIo } from './socket';
 
 export type NotificationType =
   | 'friend_request'
@@ -15,7 +16,23 @@ interface CreateParams {
 }
 
 export function createNotification({ userId, type, title, body, data }: CreateParams): void {
-  db.prepare(
+  const result = db.prepare(
     'INSERT INTO notifications (user_id, type, title, body, data) VALUES (?, ?, ?, ?, ?)'
   ).run(userId, type, title, body ?? null, data ? JSON.stringify(data) : null);
+
+  const notification = {
+    id: result.lastInsertRowid,
+    type,
+    title,
+    body: body ?? null,
+    data: data ?? null,
+    is_read: false,
+    created_at: new Date().toISOString()
+  };
+
+  try {
+    getIo()?.to(`user:${userId}`).emit('new_notification', notification);
+  } catch {
+    // socket not yet initialized
+  }
 }

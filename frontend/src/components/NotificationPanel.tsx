@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import apiClient from '../api/client';
+import { useSocket } from '../context/SocketContext';
 
 interface Notification {
   id: number;
@@ -19,7 +20,6 @@ const TYPE_ICON: Record<Notification['type'], string> = {
 };
 
 function timeAgo(dateStr: string): string {
-  // SQLite CURRENT_TIMESTAMP stores UTC without timezone suffix — force UTC parsing
   const utc = dateStr.includes('Z') || dateStr.includes('+')
     ? dateStr
     : dateStr.replace(' ', 'T') + 'Z';
@@ -39,6 +39,9 @@ export default function NotificationPanel({ onUnreadChange }: Props) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const panelRef = useRef<HTMLDivElement>(null);
+  const { socket } = useSocket();
+
+  // ── initial load ──
 
   const fetchCount = useCallback(async () => {
     try {
@@ -46,9 +49,7 @@ export default function NotificationPanel({ onUnreadChange }: Props) {
       const count = res.data.count ?? 0;
       setUnreadCount(count);
       onUnreadChange(count);
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }, [onUnreadChange]);
 
   const fetchNotifications = useCallback(async () => {
@@ -58,24 +59,33 @@ export default function NotificationPanel({ onUnreadChange }: Props) {
       const unread = res.data.filter((n: Notification) => !n.is_read).length;
       setUnreadCount(unread);
       onUnreadChange(unread);
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }, [onUnreadChange]);
 
-  // Poll unread count every 30 seconds
-  useEffect(() => {
-    fetchCount();
-    const interval = setInterval(fetchCount, 30000);
-    return () => clearInterval(interval);
-  }, [fetchCount]);
+  useEffect(() => { fetchCount(); }, [fetchCount]);
 
-  // Fetch full list when panel opens
-  useEffect(() => {
-    if (open) fetchNotifications();
-  }, [open, fetchNotifications]);
+  useEffect(() => { if (open) fetchNotifications(); }, [open, fetchNotifications]);
 
-  // Close on outside click
+  // ── realtime: socket ──
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handler = (notif: Notification) => {
+      setNotifications(prev => [notif, ...prev].slice(0, 40));
+      setUnreadCount(prev => {
+        const next = prev + 1;
+        onUnreadChange(next);
+        return next;
+      });
+    };
+
+    socket.on('new_notification', handler);
+    return () => { socket.off('new_notification', handler); };
+  }, [socket, onUnreadChange]);
+
+  // ── close on outside click ──
+
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
@@ -87,39 +97,40 @@ export default function NotificationPanel({ onUnreadChange }: Props) {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  // ── actions ──
+
   async function handleReadAll() {
     await apiClient.post('/api/notifications/read-all');
-    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
     setUnreadCount(0);
     onUnreadChange(0);
   }
 
   async function handleReadOne(id: number) {
-    const notif = notifications.find((n) => n.id === id);
+    const notif = notifications.find(n => n.id === id);
     if (!notif || notif.is_read) return;
     await apiClient.patch(`/api/notifications/${id}/read`);
-    const updated = notifications.map((n) => n.id === id ? { ...n, is_read: true } : n);
+    const updated = notifications.map(n => n.id === id ? { ...n, is_read: true } : n);
     setNotifications(updated);
-    const unread = updated.filter((n) => !n.is_read).length;
+    const unread = updated.filter(n => !n.is_read).length;
     setUnreadCount(unread);
     onUnreadChange(unread);
   }
 
   async function handleDelete(id: number) {
     await apiClient.delete(`/api/notifications/${id}`);
-    const updated = notifications.filter((n) => n.id !== id);
+    const updated = notifications.filter(n => n.id !== id);
     setNotifications(updated);
-    const unread = updated.filter((n) => !n.is_read).length;
+    const unread = updated.filter(n => !n.is_read).length;
     setUnreadCount(unread);
     onUnreadChange(unread);
   }
 
   return (
     <div className="notif-wrapper" ref={panelRef}>
-      {/* Bell button */}
       <button
         className={`btn btn-ghost btn-icon notif-bell ${open ? 'notif-bell--active' : ''}`}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(v => !v)}
         title="Уведомления"
         aria-label="Уведомления"
       >
@@ -132,13 +143,16 @@ export default function NotificationPanel({ onUnreadChange }: Props) {
         )}
       </button>
 
-      {/* Dropdown panel */}
       {open && (
         <div className="notif-panel animate-fade-in">
           <div className="notif-panel__header">
             <span style={{ fontWeight: 700, fontSize: 'var(--font-size-sm)' }}>Уведомления</span>
             {unreadCount > 0 && (
-              <button className="btn btn-ghost btn-sm" style={{ fontSize: 'var(--font-size-xs)', padding: '2px 8px' }} onClick={handleReadAll}>
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: 'var(--font-size-xs)', padding: '2px 8px' }}
+                onClick={handleReadAll}
+              >
                 Прочитать все
               </button>
             )}
@@ -151,7 +165,7 @@ export default function NotificationPanel({ onUnreadChange }: Props) {
                 <span>Нет уведомлений</span>
               </div>
             ) : (
-              notifications.map((n) => (
+              notifications.map(n => (
                 <div
                   key={n.id}
                   className={`notif-item ${!n.is_read ? 'notif-item--unread' : ''}`}
@@ -167,7 +181,7 @@ export default function NotificationPanel({ onUnreadChange }: Props) {
                   </div>
                   <button
                     className="notif-item__close"
-                    onClick={(e) => { e.stopPropagation(); handleDelete(n.id); }}
+                    onClick={e => { e.stopPropagation(); handleDelete(n.id); }}
                     title="Удалить"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">

@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import type { Task } from './TaskCard';
+import type { Task, BoardColumn } from './TaskCard';
 import type { Member } from './MemberList';
 
 interface TaskModalProps {
   task?: Task | null;
   members: Member[];
+  columns: BoardColumn[];
   groupId: number;
   onSave: (data: Partial<Task>) => Promise<void>;
   onClose: () => void;
@@ -17,24 +18,19 @@ const PRIORITIES = [
   { value: 'critical', label: 'Критичный' }
 ];
 
-const STATUSES = [
-  { value: 'todo', label: 'К выполнению' },
-  { value: 'in_progress', label: 'В работе' },
-  { value: 'done', label: 'Готово' }
-];
-
-export default function TaskModal({ task, members, onSave, onClose }: TaskModalProps) {
+export default function TaskModal({ task, members, columns, onSave, onClose }: TaskModalProps) {
   const isEdit = !!task;
 
   const [title, setTitle] = useState(task?.title || '');
   const [description, setDescription] = useState(task?.description || '');
   const [priority, setPriority] = useState<Task['priority']>(task?.priority || 'medium');
-  const [status, setStatus] = useState<Task['status']>(task?.status || 'todo');
+  const [columnId, setColumnId] = useState<number>(
+    task?.column_id ?? (columns[0]?.id ?? 0)
+  );
   const [assignedTo, setAssignedTo] = useState<string>(task?.assigned_to?.toString() || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
@@ -53,7 +49,7 @@ export default function TaskModal({ task, members, onSave, onClose }: TaskModalP
         title: title.trim(),
         description: description.trim() || undefined,
         priority,
-        status,
+        column_id: columnId,
         assigned_to: assignedTo ? Number(assignedTo) : null
       } as any);
       onClose();
@@ -112,14 +108,14 @@ export default function TaskModal({ task, members, onSave, onClose }: TaskModalP
               </div>
 
               <div className="form-group">
-                <label className="form-label">Статус</label>
+                <label className="form-label">Колонка</label>
                 <select
                   className="form-select"
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value as Task['status'])}
+                  value={columnId}
+                  onChange={(e) => setColumnId(parseInt(e.target.value))}
                 >
-                  {STATUSES.map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
+                  {columns.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
               </div>

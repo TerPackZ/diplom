@@ -1,12 +1,21 @@
 import { useState } from 'react';
 import Avatar from './Avatar';
 
+export interface BoardColumn {
+  id: number;
+  name: string;
+  position: number;
+  color: string | null;
+  is_completion: boolean;
+}
+
 export interface Task {
   id: number;
   title: string;
   description: string | null;
   priority: 'low' | 'medium' | 'high' | 'critical';
   status: 'todo' | 'in_progress' | 'done';
+  column_id: number | null;
   created_by: number;
   assigned_to: number | null;
   created_by_username: string;
@@ -20,10 +29,11 @@ export interface Task {
 
 interface TaskCardProps {
   task: Task;
+  columns: BoardColumn[];
   canEdit: boolean;
   onEdit: (task: Task) => void;
   onDelete: (taskId: number) => void;
-  onStatusChange?: (taskId: number, status: Task['status']) => void;
+  onColumnChange?: (taskId: number, columnId: number) => void;
   onClick?: (task: Task) => void;
   draggable?: boolean;
 }
@@ -35,18 +45,14 @@ const PRIORITY_LABELS: Record<string, string> = {
   critical: 'Критичный'
 };
 
-const STATUS_OPTIONS: { value: Task['status']; label: string }[] = [
-  { value: 'todo', label: 'К выполнению' },
-  { value: 'in_progress', label: 'В работе' },
-  { value: 'done', label: 'Готово' }
-];
-
-export default function TaskCard({ task, canEdit, onEdit, onDelete, onStatusChange, onClick, draggable: isDraggable }: TaskCardProps) {
+export default function TaskCard({
+  task, columns, canEdit, onEdit, onDelete, onColumnChange, onClick, draggable: isDraggable
+}: TaskCardProps) {
   const [isDragging, setIsDragging] = useState(false);
 
-  const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleColumnChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     e.stopPropagation();
-    onStatusChange?.(task.id, e.target.value as Task['status']);
+    onColumnChange?.(task.id, parseInt(e.target.value));
   };
 
   return (
@@ -101,17 +107,17 @@ export default function TaskCard({ task, canEdit, onEdit, onDelete, onStatusChan
         </span>
       </div>
 
-      {onStatusChange && (
+      {onColumnChange && (
         <div style={{ marginTop: 8 }}>
           <select
             className="form-select"
             style={{ fontSize: 'var(--font-size-xs)', padding: '4px 28px 4px 8px' }}
-            value={task.status}
-            onChange={handleStatusChange}
+            value={task.column_id ?? ''}
+            onChange={handleColumnChange}
             onClick={(e) => e.stopPropagation()}
           >
-            {STATUS_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            {columns.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
         </div>

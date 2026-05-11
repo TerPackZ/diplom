@@ -8,6 +8,8 @@ import GroupPage from './pages/GroupPage';
 import ProfilePage from './pages/ProfilePage';
 import FriendsPage from './pages/FriendsPage';
 import UserProfilePage from './pages/UserProfilePage';
+import MessagesPage from './pages/MessagesPage';
+import AnalyticsPage from './pages/AnalyticsPage';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -71,6 +73,14 @@ export default function App() {
         <Route
           path="/users/:id"
           element={<PrivateRoute><UserProfilePage /></PrivateRoute>}
+        />
+        <Route
+          path="/messages"
+          element={<PrivateRoute><MessagesPage /></PrivateRoute>}
+        />
+        <Route
+          path="/groups/:id/analytics"
+          element={<PrivateRoute><AnalyticsPage /></PrivateRoute>}
         />
 
         <Route path="*" element={<Navigate to="/" replace />} />

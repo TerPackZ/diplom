@@ -47,6 +47,14 @@ router.post('/', (req: AuthRequest, res: Response): void => {
     'INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, ?)'
   ).run(groupId, req.user!.id, 'leader');
 
+  // Create default columns
+  const colStmt = db.prepare(
+    'INSERT INTO board_columns (group_id, name, position, color, is_completion) VALUES (?, ?, ?, ?, ?)'
+  );
+  colStmt.run(groupId, 'К выполнению', 0, '#6B7280', 0);
+  colStmt.run(groupId, 'В работе', 1, '#2563EB', 0);
+  colStmt.run(groupId, 'Выполнено', 2, '#10B981', 1);
+
   const group = db.prepare(`
     SELECT g.id, g.name, g.description, g.created_by, g.created_at, 'leader' as my_role,
            1 as member_count, 0 as task_count
