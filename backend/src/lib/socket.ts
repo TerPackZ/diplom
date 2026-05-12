@@ -3,7 +3,7 @@ import { Server as SocketServer, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import db from '../db/database';
 
-interface JwtPayload { userId: number; }
+interface JwtPayload { id: number; username?: string; email?: string; }
 interface AuthSocket extends Socket { userId: number; }
 
 let io: SocketServer;
@@ -27,7 +27,7 @@ export function initSocket(server: HttpServer): SocketServer {
         token,
         process.env.JWT_SECRET || 'secret'
       ) as JwtPayload;
-      (socket as AuthSocket).userId = payload.userId;
+      (socket as AuthSocket).userId = payload.id;
       next();
     } catch {
       next(new Error('Unauthorized'));
