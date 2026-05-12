@@ -103,7 +103,7 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
 }
 
-function MessageAttachment({ msg }: { msg: Message }) {
+function MessageAttachment({ msg, onLoad }: { msg: Message; onLoad?: () => void }) {
   if (!msg.attachment_filename) return null;
   const url = `/uploads/chat/${msg.attachment_filename}`;
   const isImage = (msg.attachment_mime || '').startsWith('image/');
@@ -111,7 +111,12 @@ function MessageAttachment({ msg }: { msg: Message }) {
   if (isImage) {
     return (
       <a href={url} target="_blank" rel="noreferrer" className="chat-msg__image" onClick={e => e.stopPropagation()}>
-        <img src={url} alt={msg.attachment_original || 'image'} loading="lazy" />
+        <img
+          src={url}
+          alt={msg.attachment_original || 'image'}
+          loading="lazy"
+          onLoad={onLoad}
+        />
       </a>
     );
   }
@@ -302,7 +307,11 @@ export default function MessagesPage() {
   const [typingUsers, setTypingUsers] = useState<Map<number, string>>(new Map());
   const [mobileShowChat, setMobileShowChat] = useState(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
+  const initialScrollDoneForConv = useRef<number | null>(null);
+  const initialUnreadRef = useRef(0);
+  const conversationsRef = useRef<Conversation[]>([]);
   const typingTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTyping = useRef(false);
@@ -329,6 +338,10 @@ export default function MessagesPage() {
 
   useEffect(() => { loadConversations(); }, [loadConversations]);
 
+  // Keep a ref to the latest conversations so scroll-positioning logic
+  // can read it without recreating callbacks every change
+  useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
+
   // Handle ?conv= query param (e.g. from GroupPage)
   useEffect(() => {
     const convParam = searchParams.get('conv');
@@ -345,6 +358,13 @@ export default function MessagesPage() {
   // ── Load messages ──
 
   const loadMessages = useCallback(async (convId: number) => {
+    // Capture unread BEFORE clearing/marking-read so initial scroll lands on
+    // the first unread message instead of the very bottom.
+    const conv = conversationsRef.current.find(c => c.id === convId);
+    initialUnreadRef.current = conv?.unread_count ?? 0;
+    initialScrollDoneForConv.current = null;
+    isAtBottomRef.current = true;
+
     setLoadingMsgs(true);
     setMessages([]);
     try {
@@ -361,17 +381,75 @@ export default function MessagesPage() {
     setConversations(prev => prev.map(c => c.id === convId ? { ...c, unread_count: 0 } : c));
   }, []);
 
+  // ── Scroll helpers ──
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const c = messagesContainerRef.current;
+    if (!c) return;
+    if (behavior === 'smooth') {
+      c.scrollTo({ top: c.scrollHeight, behavior: 'smooth' });
+    } else {
+      c.scrollTop = c.scrollHeight;
+    }
+  }, []);
+
+  const handleMessagesScroll = useCallback(() => {
+    const c = messagesContainerRef.current;
+    if (!c) return;
+    isAtBottomRef.current = c.scrollHeight - c.scrollTop - c.clientHeight < 120;
+  }, []);
+
+  // Called by image attachments when they finish loading — re-anchor to bottom
+  // so that delayed image heights don't leave the chat half-scrolled.
+  const handleAttachmentLoaded = useCallback(() => {
+    if (isAtBottomRef.current) scrollToBottom('auto');
+  }, [scrollToBottom]);
+
   useEffect(() => {
     if (!activeConvId) return;
     loadMessages(activeConvId);
     inputRef.current?.focus();
   }, [activeConvId, loadMessages]);
 
-  // ── Scroll to bottom ──
-
+  // ── Scroll positioning ──
+  //
+  // First render for a conversation:
+  //   • if there were unread messages — jump (no animation) to the first one
+  //   • otherwise — jump to the bottom
+  // Subsequent renders (new message arrived / sent):
+  //   • smooth scroll to bottom only if user was near bottom OR sent it themself
+  //   • otherwise leave their reading position alone
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (loadingMsgs || messages.length === 0) return;
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    if (initialScrollDoneForConv.current !== activeConvId) {
+      initialScrollDoneForConv.current = activeConvId ?? null;
+      const unread = initialUnreadRef.current;
+
+      if (unread > 0 && unread <= messages.length) {
+        const firstUnreadIdx = messages.length - unread;
+        const target = messages[firstUnreadIdx];
+        const el = target ? document.getElementById(`msg-${target.id}`) : null;
+        if (el) {
+          el.scrollIntoView({ behavior: 'auto', block: 'start' });
+          return;
+        }
+      }
+      // No unread, or couldn't find target → jump to bottom instantly
+      container.scrollTop = container.scrollHeight;
+      isAtBottomRef.current = true;
+      return;
+    }
+
+    // Subsequent updates
+    const last = messages[messages.length - 1];
+    if (isAtBottomRef.current || last?.user_id === user?.id) {
+      scrollToBottom('smooth');
+      isAtBottomRef.current = true;
+    }
+  }, [messages, loadingMsgs, activeConvId, user?.id, scrollToBottom]);
 
   // ── Socket events ──
 
@@ -714,7 +792,7 @@ export default function MessagesPage() {
                 </div>
               )}
               {!msg.is_deleted && msg.attachment_filename && (
-                <MessageAttachment msg={msg} />
+                <MessageAttachment msg={msg} onLoad={handleAttachmentLoaded} />
               )}
               {msg.content && <span className="chat-msg__text">{msg.content}</span>}
               <span className="chat-msg__time">
@@ -931,7 +1009,11 @@ export default function MessagesPage() {
                 </button>
               </div>
 
-              <div className="chat-messages">
+              <div
+                className="chat-messages"
+                ref={messagesContainerRef}
+                onScroll={handleMessagesScroll}
+              >
                 {loadingMsgs ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <SkeletonMessage />
@@ -953,7 +1035,6 @@ export default function MessagesPage() {
                     <span>{typingList.join(', ')} {typingList.length === 1 ? 'печатает' : 'печатают'}...</span>
                   </div>
                 )}
-                <div ref={messagesEndRef} />
               </div>
 
               <div className="chat-input-wrap">
