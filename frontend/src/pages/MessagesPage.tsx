@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../context/SocketContext';
@@ -104,6 +104,16 @@ function formatFileSize(bytes: number): string {
 }
 
 function MessageAttachment({ msg, onLoad }: { msg: Message; onLoad?: () => void }) {
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  // Cached images may skip the React onLoad event entirely — check .complete
+  // on mount and fire the handler manually if so.
+  useEffect(() => {
+    if (imgRef.current?.complete && onLoad) onLoad();
+    // intentionally not depending on onLoad to avoid re-runs from new refs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (!msg.attachment_filename) return null;
   const url = `/uploads/chat/${msg.attachment_filename}`;
   const isImage = (msg.attachment_mime || '').startsWith('image/');
@@ -112,9 +122,9 @@ function MessageAttachment({ msg, onLoad }: { msg: Message; onLoad?: () => void 
     return (
       <a href={url} target="_blank" rel="noreferrer" className="chat-msg__image" onClick={e => e.stopPropagation()}>
         <img
+          ref={imgRef}
           src={url}
           alt={msg.attachment_original || 'image'}
-          loading="lazy"
           onLoad={onLoad}
         />
       </a>
@@ -419,28 +429,43 @@ export default function MessagesPage() {
   // Subsequent renders (new message arrived / sent):
   //   • smooth scroll to bottom only if user was near bottom OR sent it themself
   //   • otherwise leave their reading position alone
-  useEffect(() => {
+  //
+  // Uses useLayoutEffect to position BEFORE paint, then re-runs on the next
+  // animation frame (handles late image reflow that has not produced its
+  // final height yet — esp. images that were cached and never fire onLoad).
+  useLayoutEffect(() => {
     if (loadingMsgs || messages.length === 0) return;
     const container = messagesContainerRef.current;
     if (!container) return;
 
-    if (initialScrollDoneForConv.current !== activeConvId) {
-      initialScrollDoneForConv.current = activeConvId ?? null;
-      const unread = initialUnreadRef.current;
+    const isInitial = initialScrollDoneForConv.current !== activeConvId;
 
+    const placeInitial = () => {
+      const unread = initialUnreadRef.current;
       if (unread > 0 && unread <= messages.length) {
-        const firstUnreadIdx = messages.length - unread;
-        const target = messages[firstUnreadIdx];
+        const target = messages[messages.length - unread];
         const el = target ? document.getElementById(`msg-${target.id}`) : null;
         if (el) {
           el.scrollIntoView({ behavior: 'auto', block: 'start' });
           return;
         }
       }
-      // No unread, or couldn't find target → jump to bottom instantly
       container.scrollTop = container.scrollHeight;
-      isAtBottomRef.current = true;
-      return;
+    };
+
+    if (isInitial) {
+      initialScrollDoneForConv.current = activeConvId ?? null;
+      placeInitial();
+      // Catch late layout reflow (cached images sometimes settle one frame later)
+      const raf1 = requestAnimationFrame(() => {
+        placeInitial();
+        isAtBottomRef.current = true;
+      });
+      const raf2 = requestAnimationFrame(() => requestAnimationFrame(placeInitial));
+      return () => {
+        cancelAnimationFrame(raf1);
+        cancelAnimationFrame(raf2);
+      };
     }
 
     // Subsequent updates
