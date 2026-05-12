@@ -85,7 +85,7 @@ export default function ProfilePage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-lg)', marginBottom: 'var(--space-xl)', flexWrap: 'wrap' }}>
             {/* Clickable avatar */}
             <div
-              style={{ position: 'relative', cursor: 'pointer', flexShrink: 0 }}
+              className="profile-avatar-wrap"
               onClick={() => fileInputRef.current?.click()}
               title="Нажмите для смены аватара"
             >
@@ -94,22 +94,7 @@ export default function ProfilePage() {
                 name={user?.display_name || user?.username}
                 size={80}
               />
-              <div
-                className="avatar-overlay"
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  borderRadius: '50%',
-                  background: 'rgba(0,0,0,0.55)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: 0,
-                  transition: 'opacity var(--transition-base)'
-                }}
-                onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.opacity = '1')}
-                onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.opacity = '0')}
-              >
+              <div className="profile-avatar-overlay">
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
                   <circle cx="12" cy="13" r="4"/>

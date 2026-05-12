@@ -8,6 +8,33 @@ router.use(authenticate);
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
+function getConversationMemberIds(conversationId: number): number[] {
+  const conv = db.prepare(
+    'SELECT type, group_id FROM conversations WHERE id = ?'
+  ).get(conversationId) as { type: string; group_id: number | null } | undefined;
+  if (!conv) return [];
+
+  if (conv.type === 'direct') {
+    return (db.prepare(
+      'SELECT user_id FROM conversation_members WHERE conversation_id = ?'
+    ).all(conversationId) as { user_id: number }[]).map(r => r.user_id);
+  }
+
+  return (db.prepare(
+    'SELECT user_id FROM group_members WHERE group_id = ?'
+  ).all(conv.group_id) as { user_id: number }[]).map(r => r.user_id);
+}
+
+function emitToConversationMembers(conversationId: number, event: string, payload: unknown): void {
+  const io = getIo();
+  if (!io) return;
+  const memberIds = getConversationMemberIds(conversationId);
+  for (const uid of memberIds) {
+    io.to(`user:${uid}`).emit(event, payload);
+  }
+  console.log(`[socket] emit ${event} → ${memberIds.length} members of conv:${conversationId}`);
+}
+
 function getConversationWithMeta(conversationId: number, userId: number) {
   const conv = db.prepare('SELECT id, type, group_id, created_at FROM conversations WHERE id = ?')
     .get(conversationId) as { id: number; type: string; group_id: number | null; created_at: string } | undefined;
@@ -237,12 +264,8 @@ router.post('/conversations/:id/send', (req: AuthRequest, res: Response): void =
     WHERE m.id = ?
   `).get(result.lastInsertRowid) as any;
 
-  // Emit via socket to all room members
-  try {
-    getIo()?.to(`conv:${convId}`).emit('new_message', message);
-  } catch {
-    // socket not yet initialized (shouldn't happen in prod)
-  }
+  // Emit to all conversation members' personal user rooms (works regardless of page)
+  emitToConversationMembers(convId, 'new_message', message);
 
   res.status(201).json(message);
 });
@@ -278,12 +301,10 @@ router.delete('/:messageId', (req: AuthRequest, res: Response): void => {
   db.prepare('UPDATE messages SET is_deleted = 1, content = ? WHERE id = ?')
     .run('Сообщение удалено', msgId);
 
-  try {
-    getIo()?.to(`conv:${msg.conversation_id}`).emit('message_deleted', {
-      messageId: msgId,
-      conversationId: msg.conversation_id
-    });
-  } catch { /* ignore */ }
+  emitToConversationMembers(msg.conversation_id, 'message_deleted', {
+    messageId: msgId,
+    conversationId: msg.conversation_id
+  });
 
   res.json({ ok: true });
 });

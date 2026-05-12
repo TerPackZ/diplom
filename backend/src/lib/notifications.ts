@@ -31,8 +31,14 @@ export function createNotification({ userId, type, title, body, data }: CreatePa
   };
 
   try {
-    getIo()?.to(`user:${userId}`).emit('new_notification', notification);
-  } catch {
-    // socket not yet initialized
+    const io = getIo();
+    if (io) {
+      io.to(`user:${userId}`).emit('new_notification', notification);
+      console.log(`[socket] emit new_notification → user:${userId} (${type})`);
+    } else {
+      console.warn('[socket] io not initialized, cannot emit notification');
+    }
+  } catch (e) {
+    console.error('[socket] failed to emit notification', e);
   }
 }

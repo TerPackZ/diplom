@@ -72,6 +72,7 @@ export default function NotificationPanel({ onUnreadChange }: Props) {
     if (!socket) return;
 
     const handler = (notif: Notification) => {
+      console.log('[socket] received new_notification', notif);
       setNotifications(prev => [notif, ...prev].slice(0, 40));
       setUnreadCount(prev => {
         const next = prev + 1;

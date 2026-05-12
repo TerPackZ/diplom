@@ -26,8 +26,17 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       transports: ['websocket', 'polling']
     });
 
-    s.on('connect', () => setConnected(true));
-    s.on('disconnect', () => setConnected(false));
+    s.on('connect', () => {
+      console.log('[socket] connected', s.id);
+      setConnected(true);
+    });
+    s.on('disconnect', (reason) => {
+      console.log('[socket] disconnected', reason);
+      setConnected(false);
+    });
+    s.on('connect_error', (err) => {
+      console.error('[socket] connect_error:', err.message);
+    });
     setSocket(s);
 
     return () => {

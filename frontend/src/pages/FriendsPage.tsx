@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../api/client';
 import Avatar from '../components/Avatar';
+import { useToast } from '../context/ToastContext';
 
 interface FriendUser {
   id: number;
@@ -21,6 +22,7 @@ interface SearchUser extends FriendUser {
 
 export default function FriendsPage() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [friends, setFriends] = useState<FriendUser[]>([]);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [sent, setSent] = useState<FriendUser[]>([]);
@@ -30,7 +32,7 @@ export default function FriendsPage() {
   const [searching, setSearching] = useState(false);
 
   const [loading, setLoading] = useState(true);
-  const [actionMsg, setActionMsg] = useState('');
+  const [showSent, setShowSent] = useState(false);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -80,25 +82,23 @@ export default function FriendsPage() {
   async function handleSendRequest(userId: number) {
     try {
       const res = await apiClient.post(`/api/friends/send/${userId}`);
-      setActionMsg(res.data.message || 'Запрос отправлен');
+      toast.show(res.data.message || 'Запрос отправлен', 'success');
       fetchAll();
-      // Update search results status immediately
       setSearchResults((prev) =>
         prev.map((u) => u.id === userId ? { ...u, friendStatus: res.data.status === 'accepted' ? 'accepted' : 'sent' } : u)
       );
     } catch (err: any) {
-      setActionMsg(err.response?.data?.error || 'Ошибка');
+      toast.show(err.response?.data?.error || 'Ошибка', 'error');
     }
-    setTimeout(() => setActionMsg(''), 3000);
   }
 
   async function handleAccept(requesterId: number) {
     try {
       await apiClient.put(`/api/friends/accept/${requesterId}`);
+      toast.show('Запрос принят', 'success');
       fetchAll();
     } catch (err: any) {
-      setActionMsg(err.response?.data?.error || 'Ошибка');
-      setTimeout(() => setActionMsg(''), 3000);
+      toast.show(err.response?.data?.error || 'Ошибка', 'error');
     }
   }
 
@@ -107,8 +107,7 @@ export default function FriendsPage() {
       await apiClient.delete(`/api/friends/decline/${requesterId}`);
       fetchAll();
     } catch (err: any) {
-      setActionMsg(err.response?.data?.error || 'Ошибка');
-      setTimeout(() => setActionMsg(''), 3000);
+      toast.show(err.response?.data?.error || 'Ошибка', 'error');
     }
   }
 
@@ -116,13 +115,13 @@ export default function FriendsPage() {
     if (!confirm('Удалить из друзей?')) return;
     try {
       await apiClient.delete(`/api/friends/remove/${userId}`);
+      toast.show('Удалён из друзей', 'info');
       fetchAll();
       setSearchResults((prev) =>
         prev.map((u) => u.id === userId ? { ...u, friendStatus: 'none' } : u)
       );
     } catch (err: any) {
-      setActionMsg(err.response?.data?.error || 'Ошибка');
-      setTimeout(() => setActionMsg(''), 3000);
+      toast.show(err.response?.data?.error || 'Ошибка', 'error');
     }
   }
 
@@ -165,21 +164,6 @@ export default function FriendsPage() {
         <h1 style={{ fontSize: 'var(--font-size-3xl)', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: 'var(--space-xl)' }}>
           Друзья
         </h1>
-
-        {actionMsg && (
-          <div style={{
-            marginBottom: 'var(--space-lg)',
-            padding: '10px 16px',
-            borderRadius: 'var(--radius)',
-            background: 'rgba(124, 58, 237, 0.15)',
-            border: '1px solid rgba(124, 58, 237, 0.3)',
-            fontSize: 'var(--font-size-sm)',
-            color: 'var(--accent-from)',
-            animation: 'fadeIn 0.2s ease'
-          }}>
-            {actionMsg}
-          </div>
-        )}
 
         {/* Search section */}
         <div className="card" style={{ marginBottom: 'var(--space-lg)' }}>
@@ -356,45 +340,40 @@ export default function FriendsPage() {
           )}
         </div>
 
-        {/* Sent requests (collapsed) */}
+        {/* Sent requests (collapsible) */}
         {sent.length > 0 && (
-          <details style={{ marginTop: 'var(--space-lg)' }}>
-            <summary style={{
-              cursor: 'pointer',
-              fontSize: 'var(--font-size-sm)',
-              color: 'var(--text-secondary)',
-              padding: '8px 0',
-              userSelect: 'none'
-            }}>
-              Исходящие запросы ({sent.length})
-            </summary>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 'var(--space-sm)' }}>
-              {sent.map((s: any) => (
-                <div
-                  key={s.addressee_id || s.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-sm)',
-                    padding: '8px 12px',
-                    borderRadius: 'var(--radius)',
-                    background: 'var(--surface-2)',
-                    border: '1px solid var(--border)'
-                  }}
-                >
-                  <Avatar src={s.avatar_url} name={s.display_name || s.username} size={32} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)' }}>
-                      {s.display_name || s.username}
-                    </div>
-                    <div style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-xs)' }}>
-                      @{s.username} · ожидает ответа
+          <div style={{ marginTop: 'var(--space-lg)' }}>
+            <button
+              className="collapse-toggle"
+              onClick={() => setShowSent(v => !v)}
+            >
+              <svg
+                width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2.5"
+                style={{ transform: showSent ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform var(--transition-base)' }}
+              >
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+              Исходящие запросы · {sent.length}
+            </button>
+            {showSent && (
+              <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 'var(--space-sm)' }}>
+                {sent.map((s: any) => (
+                  <div key={s.addressee_id || s.id} className="user-row">
+                    <Avatar src={s.avatar_url} name={s.display_name || s.username} size={32} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)' }}>
+                        {s.display_name || s.username}
+                      </div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-xs)' }}>
+                        @{s.username} · ожидает ответа
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </details>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>

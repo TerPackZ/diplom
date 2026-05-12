@@ -37,12 +37,15 @@ export default function Navbar() {
   // Real-time: new message → increment if not on /messages
   useEffect(() => {
     if (!socket) return;
-    const handler = () => {
+    const handler = (msg: { conversation_id: number; user_id: number }) => {
+      console.log('[socket] received new_message in navbar', msg);
+      // Don't bump on own messages
+      if (msg.user_id === user?.id) return;
       if (location.pathname !== '/messages') setUnreadMessages(prev => prev + 1);
     };
     socket.on('new_message', handler);
     return () => { socket.off('new_message', handler); };
-  }, [socket, location.pathname]);
+  }, [socket, location.pathname, user?.id]);
 
   // Real-time: new notification (friend request) → bump pending count
   useEffect(() => {

@@ -38,6 +38,11 @@ export function initSocket(server: HttpServer): SocketServer {
     const userId = (socket as AuthSocket).userId;
 
     socket.join(`user:${userId}`);
+    console.log(`[socket] connect user:${userId} (socket=${socket.id})`);
+
+    socket.on('disconnect', (reason) => {
+      console.log(`[socket] disconnect user:${userId} (${reason})`);
+    });
 
     socket.on('join_conversation', (conversationId: number) => {
       if (!canAccessConversation(userId, conversationId)) return;
