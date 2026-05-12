@@ -269,7 +269,7 @@ export default function MessagesPage() {
 
     const handleNewMessage = (msg: Message) => {
       if (msg.conversation_id === activeConvId) {
-        setMessages(prev => [...prev, msg]);
+        setMessages(prev => prev.some(m => m.id === msg.id) ? prev : [...prev, msg]);
         // Mark as read since we're viewing this conversation
         apiClient.patch(`/api/messages/conversations/${msg.conversation_id}/read`).catch(() => {});
       }
@@ -353,7 +353,27 @@ export default function MessagesPage() {
     isTyping.current = false;
 
     try {
-      await apiClient.post(`/api/messages/conversations/${activeConvId}/send`, { content });
+      const res = await apiClient.post(`/api/messages/conversations/${activeConvId}/send`, { content });
+      const sent: Message = res.data;
+      // Optimistic local update — don't wait for socket echo
+      setMessages(prev => prev.some(m => m.id === sent.id) ? prev : [...prev, sent]);
+      setConversations(prev => {
+        const existing = prev.find(c => c.id === sent.conversation_id);
+        if (!existing) return prev;
+        return [
+          {
+            ...existing,
+            last_message: {
+              id: sent.id,
+              content: sent.content,
+              created_at: sent.created_at,
+              display_name: sent.display_name,
+              username: sent.username
+            }
+          },
+          ...prev.filter(c => c.id !== sent.conversation_id)
+        ];
+      });
     } catch {
       setInputValue(content);
     } finally {
