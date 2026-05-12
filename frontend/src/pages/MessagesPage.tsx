@@ -6,6 +6,7 @@ import apiClient from '../api/client';
 import Avatar from '../components/Avatar';
 import EmptyState from '../components/EmptyState';
 import { SkeletonConversationRow, SkeletonMessage } from '../components/Skeleton';
+import { useToast } from '../context/ToastContext';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,10 @@ interface Message {
   username: string;
   display_name: string | null;
   avatar_url: string | null;
+  attachment_filename: string | null;
+  attachment_original: string | null;
+  attachment_size: number | null;
+  attachment_mime: string | null;
 }
 
 interface Friend {
@@ -75,6 +80,53 @@ function formatTime(dateStr: string): string {
   if (isToday) return hm;
   if (isYesterday) return `Вчера ${hm}`;
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) + ' ' + hm;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+function MessageAttachment({ msg }: { msg: Message }) {
+  if (!msg.attachment_filename) return null;
+  const url = `/uploads/chat/${msg.attachment_filename}`;
+  const isImage = (msg.attachment_mime || '').startsWith('image/');
+
+  if (isImage) {
+    return (
+      <a href={url} target="_blank" rel="noreferrer" className="chat-msg__image" onClick={e => e.stopPropagation()}>
+        <img src={url} alt={msg.attachment_original || 'image'} loading="lazy" />
+      </a>
+    );
+  }
+
+  return (
+    <a
+      href={url}
+      download={msg.attachment_original ?? undefined}
+      className="chat-msg__file"
+      onClick={e => e.stopPropagation()}
+    >
+      <span className="chat-msg__file-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+      </span>
+      <span className="chat-msg__file-info">
+        <span className="chat-msg__file-name">{msg.attachment_original}</span>
+        <span className="chat-msg__file-size">{formatFileSize(msg.attachment_size || 0)}</span>
+      </span>
+      <span className="chat-msg__file-download">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+      </span>
+    </a>
+  );
 }
 
 function formatDateSeparator(dateStr: string): string {
@@ -102,74 +154,110 @@ function convAvatar(conv: Conversation) {
 
 // ── NewChatModal ─────────────────────────────────────────────────────────────
 
+interface SearchedUser {
+  id: number;
+  username: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  can_message: boolean;
+}
+
 function NewChatModal({
   onClose,
-  onSelect
+  onSelect,
+  onError
 }: {
   onClose: () => void;
   onSelect: (userId: number) => void;
+  onError: (msg: string) => void;
 }) {
-  const [friends, setFriends] = useState<Friend[]>([]);
   const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [results, setResults] = useState<SearchedUser[]>([]);
+  const [searching, setSearching] = useState(false);
 
   useEffect(() => {
-    apiClient.get('/api/friends').then(r => {
-      setFriends(r.data);
-    }).finally(() => setLoading(false));
-  }, []);
+    if (query.trim().length < 2) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const timer = setTimeout(() => {
+      apiClient.get(`/api/users/search?q=${encodeURIComponent(query.trim())}`)
+        .then(r => setResults(r.data))
+        .catch(() => setResults([]))
+        .finally(() => setSearching(false));
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [query]);
 
-  const filtered = friends.filter(f => {
-    const q = query.toLowerCase();
-    return (f.display_name || f.username).toLowerCase().includes(q) || f.username.toLowerCase().includes(q);
-  });
+  function handlePick(u: SearchedUser) {
+    if (!u.can_message) {
+      onError('Этот пользователь принимает сообщения только от друзей');
+      return;
+    }
+    onSelect(u.id);
+  }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal" style={{ maxWidth: 460 }}>
         <div className="modal__header">
-          <h3>Новый чат</h3>
-          <button className="modal__close" onClick={onClose}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <h2 className="modal__title">Новый чат</h2>
+          <button className="modal__close" onClick={onClose} aria-label="Закрыть">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
           </button>
         </div>
-        <div style={{ padding: 'var(--space-md)' }}>
-          <input
-            className="input"
-            placeholder="Поиск друзей..."
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            autoFocus
-          />
-          <div style={{ marginTop: 'var(--space-sm)', maxHeight: 320, overflowY: 'auto' }}>
-            {loading ? (
-              <div style={{ textAlign: 'center', padding: 'var(--space-lg)' }}>
-                <div className="spinner" style={{ width: 28, height: 28, borderWidth: 2 }} />
+
+        <div className="modal__body">
+          <div className="form-group">
+            <label className="form-label">Найти пользователя</label>
+            <input
+              className="form-input"
+              placeholder="Имя или username (минимум 2 символа)"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              autoFocus
+            />
+          </div>
+
+          <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {query.trim().length < 2 ? (
+              <div style={{ textAlign: 'center', padding: 'var(--space-md)', color: 'var(--text-muted)', fontSize: 'var(--font-size-sm)' }}>
+                Введите имя или username для поиска
               </div>
-            ) : filtered.length === 0 ? (
-              <div className="empty-state" style={{ padding: 'var(--space-lg)' }}>
-                <div className="empty-state__title" style={{ fontSize: 'var(--font-size-sm)' }}>
-                  {friends.length === 0 ? 'Нет друзей' : 'Ничего не найдено'}
-                </div>
+            ) : searching ? (
+              <div style={{ textAlign: 'center', padding: 'var(--space-md)' }}>
+                <div className="spinner" style={{ width: 24, height: 24, borderWidth: 2 }} />
+              </div>
+            ) : results.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 'var(--space-md)', color: 'var(--text-muted)', fontSize: 'var(--font-size-sm)' }}>
+                Ничего не найдено
               </div>
             ) : (
-              filtered.map(f => (
+              results.map(u => (
                 <button
-                  key={f.id}
-                  className="chat-friend-row"
-                  onClick={() => onSelect(f.id)}
+                  key={u.id}
+                  className={`chat-friend-row ${!u.can_message ? 'chat-friend-row--disabled' : ''}`}
+                  onClick={() => handlePick(u)}
+                  title={!u.can_message ? 'Пользователь принимает сообщения только от друзей' : undefined}
                 >
-                  <Avatar src={f.avatar_url} name={f.display_name || f.username} size={36} />
-                  <div>
+                  <Avatar src={u.avatar_url} name={u.display_name || u.username} size={36} userId={u.id} showStatus />
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)' }}>
-                      {f.display_name || f.username}
+                      {u.display_name || u.username}
                     </div>
                     <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
-                      @{f.username}
+                      @{u.username}
                     </div>
                   </div>
+                  {!u.can_message && (
+                    <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
+                      🔒 только друзья
+                    </span>
+                  )}
                 </button>
               ))
             )}
@@ -185,6 +273,7 @@ function NewChatModal({
 export default function MessagesPage() {
   const { user } = useAuth();
   const { socket } = useSocket();
+  const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -204,6 +293,9 @@ export default function MessagesPage() {
   const isTyping = useRef(false);
   const prevConvId = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   // ── Load conversations ──
 
@@ -348,15 +440,33 @@ export default function MessagesPage() {
   // ── Send message ──
 
   const sendMessage = useCallback(async () => {
-    if (!inputValue.trim() || !activeConvId || sending) return;
+    if (!activeConvId || sending) return;
     const content = inputValue.trim();
+    if (!content && !pendingFile) return;
+
     setInputValue('');
+    const fileToSend = pendingFile;
+    setPendingFile(null);
     setSending(true);
     isTyping.current = false;
 
     try {
-      const res = await apiClient.post(`/api/messages/conversations/${activeConvId}/send`, { content });
-      const sent: Message = res.data;
+      let sent: Message;
+      if (fileToSend) {
+        const form = new FormData();
+        form.append('file', fileToSend);
+        if (content) form.append('content', content);
+        const res = await apiClient.post(
+          `/api/messages/conversations/${activeConvId}/upload`,
+          form,
+          { headers: { 'Content-Type': 'multipart/form-data' } }
+        );
+        sent = res.data;
+      } else {
+        const res = await apiClient.post(`/api/messages/conversations/${activeConvId}/send`, { content });
+        sent = res.data;
+      }
+
       // Optimistic local update — don't wait for socket echo
       setMessages(prev => prev.some(m => m.id === sent.id) ? prev : [...prev, sent]);
       setConversations(prev => {
@@ -367,7 +477,7 @@ export default function MessagesPage() {
             ...existing,
             last_message: {
               id: sent.id,
-              content: sent.content,
+              content: sent.attachment_filename ? `📎 ${sent.attachment_original}` : sent.content,
               created_at: sent.created_at,
               display_name: sent.display_name,
               username: sent.username
@@ -378,10 +488,11 @@ export default function MessagesPage() {
       });
     } catch {
       setInputValue(content);
+      setPendingFile(fileToSend);
     } finally {
       setSending(false);
     }
-  }, [inputValue, activeConvId, sending]);
+  }, [inputValue, activeConvId, sending, pendingFile]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -419,10 +530,10 @@ export default function MessagesPage() {
   // ── Start direct chat ──
 
   const openDirectChat = useCallback(async (userId: number) => {
-    setShowNewChat(false);
     try {
       const res = await apiClient.post(`/api/messages/direct/${userId}`);
       const conv: Conversation = res.data;
+      setShowNewChat(false);
       setConversations(prev => {
         const exists = prev.find(c => c.id === conv.id);
         if (exists) return prev;
@@ -430,10 +541,10 @@ export default function MessagesPage() {
       });
       setActiveConvId(conv.id);
       setMobileShowChat(true);
-    } catch {
-      // ignore
+    } catch (err: any) {
+      toast.show(err.response?.data?.error || 'Не удалось открыть чат', 'error');
     }
-  }, []);
+  }, [toast]);
 
   // ── Select conversation ──
 
@@ -487,7 +598,10 @@ export default function MessagesPage() {
               <div className="chat-msg__name">{msg.display_name || msg.username}</div>
             )}
             <div className={`chat-msg__bubble ${msg.is_deleted ? 'chat-msg__bubble--deleted' : ''}`}>
-              <span className="chat-msg__text">{msg.content}</span>
+              {!msg.is_deleted && msg.attachment_filename && (
+                <MessageAttachment msg={msg} />
+              )}
+              {msg.content && <span className="chat-msg__text">{msg.content}</span>}
               <span className="chat-msg__time">{formatTime(msg.created_at)}</span>
               {!msg.is_deleted && isOwn && (
                 <button
@@ -646,26 +760,76 @@ export default function MessagesPage() {
                 <div ref={messagesEndRef} />
               </div>
 
-              <div className="chat-input-area">
-                <textarea
-                  ref={inputRef}
-                  className="chat-input"
-                  placeholder="Написать сообщение... (Enter — отправить, Shift+Enter — новая строка)"
-                  value={inputValue}
-                  onChange={handleInputChange}
-                  onKeyDown={handleKeyDown}
-                  rows={1}
-                />
-                <button
-                  className="btn btn-primary chat-send-btn"
-                  onClick={sendMessage}
-                  disabled={!inputValue.trim() || sending}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="22" y1="2" x2="11" y2="13"/>
-                    <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                  </svg>
-                </button>
+              <div className="chat-input-wrap">
+                {pendingFile && (
+                  <div className="chat-pending-file">
+                    <span className="chat-pending-file__icon">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                      </svg>
+                    </span>
+                    <span className="chat-pending-file__name">{pendingFile.name}</span>
+                    <span className="chat-pending-file__size">{formatFileSize(pendingFile.size)}</span>
+                    <button
+                      className="chat-pending-file__remove"
+                      type="button"
+                      onClick={() => setPendingFile(null)}
+                      title="Убрать файл"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                    </button>
+                  </div>
+                )}
+
+                <div className="chat-input-area">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      if (f.size > 25 * 1024 * 1024) {
+                        alert('Размер файла не должен превышать 25 МБ');
+                      } else {
+                        setPendingFile(f);
+                      }
+                      e.target.value = '';
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-ghost chat-attach-btn"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Прикрепить файл"
+                    disabled={sending}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                    </svg>
+                  </button>
+                  <textarea
+                    ref={inputRef}
+                    className="chat-input"
+                    placeholder={pendingFile ? 'Подпись к файлу (необязательно)' : 'Написать сообщение... (Enter — отправить, Shift+Enter — новая строка)'}
+                    value={inputValue}
+                    onChange={handleInputChange}
+                    onKeyDown={handleKeyDown}
+                    rows={1}
+                  />
+                  <button
+                    className="btn btn-primary chat-send-btn"
+                    onClick={sendMessage}
+                    disabled={(!inputValue.trim() && !pendingFile) || sending}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"/>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                    </svg>
+                  </button>
+                </div>
               </div>
             </>
           ) : (
@@ -686,6 +850,7 @@ export default function MessagesPage() {
         <NewChatModal
           onClose={() => setShowNewChat(false)}
           onSelect={openDirectChat}
+          onError={(msg) => toast.show(msg, 'error')}
         />
       )}
     </div>

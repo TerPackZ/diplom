@@ -1,10 +1,50 @@
 import { Router, Response } from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import crypto from 'crypto';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import db from '../db/database';
 import { getIo, canAccessConversation } from '../lib/socket';
 
 const router = Router();
 router.use(authenticate);
+
+// ── upload (chat attachments) ───────────────────────────────────────────────
+
+const chatStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    const dir = path.join(__dirname, '..', '..', 'uploads', 'chat');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
+  }
+});
+
+const chatUpload = multer({
+  storage: chatStorage,
+  limits: { fileSize: 25 * 1024 * 1024 } // 25 MB
+});
+
+function deleteChatFile(filename: string | null) {
+  if (!filename) return;
+  const file = path.join(__dirname, '..', '..', 'uploads', 'chat', filename);
+  if (fs.existsSync(file)) {
+    try { fs.unlinkSync(file); } catch { /* ignore */ }
+  }
+}
+
+// Friendship helper for DM permission check
+function areFriends(a: number, b: number): boolean {
+  return !!db.prepare(`
+    SELECT 1 FROM friendships
+    WHERE status = 'accepted'
+      AND ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?))
+  `).get(a, b, b, a);
+}
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -151,12 +191,15 @@ router.post('/direct/:userId', (req: AuthRequest, res: Response): void => {
 
   if (meId === otherId) { res.status(400).json({ error: 'Cannot chat with yourself' }); return; }
 
-  const friend = db.prepare(`
-    SELECT id FROM friendships
-    WHERE status = 'accepted'
-      AND ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?))
-  `).get(meId, otherId, otherId, meId);
-  if (!friend) { res.status(403).json({ error: 'You must be friends first' }); return; }
+  const other = db.prepare(
+    'SELECT id, dm_permission FROM users WHERE id = ?'
+  ).get(otherId) as { id: number; dm_permission: string } | undefined;
+  if (!other) { res.status(404).json({ error: 'User not found' }); return; }
+
+  if (other.dm_permission === 'friends_only' && !areFriends(meId, otherId)) {
+    res.status(403).json({ error: 'Этот пользователь принимает сообщения только от друзей' });
+    return;
+  }
 
   // Check if direct conversation already exists
   const existing = db.prepare(`
@@ -225,6 +268,7 @@ router.get('/conversations/:id/messages', (req: AuthRequest, res: Response): voi
   const rows = before
     ? db.prepare(`
         SELECT m.id, m.conversation_id, m.user_id, m.content, m.is_deleted, m.created_at, m.updated_at,
+               m.attachment_filename, m.attachment_original, m.attachment_size, m.attachment_mime,
                u.username, u.display_name, u.avatar_url
         FROM messages m JOIN users u ON u.id = m.user_id
         WHERE m.conversation_id = ? AND m.id < ?
@@ -232,6 +276,7 @@ router.get('/conversations/:id/messages', (req: AuthRequest, res: Response): voi
       `).all(convId, before, limit)
     : db.prepare(`
         SELECT m.id, m.conversation_id, m.user_id, m.content, m.is_deleted, m.created_at, m.updated_at,
+               m.attachment_filename, m.attachment_original, m.attachment_size, m.attachment_mime,
                u.username, u.display_name, u.avatar_url
         FROM messages m JOIN users u ON u.id = m.user_id
         WHERE m.conversation_id = ?
@@ -259,6 +304,7 @@ router.post('/conversations/:id/send', (req: AuthRequest, res: Response): void =
 
   const message = db.prepare(`
     SELECT m.id, m.conversation_id, m.user_id, m.content, m.is_deleted, m.created_at, m.updated_at,
+           m.attachment_filename, m.attachment_original, m.attachment_size, m.attachment_mime,
            u.username, u.display_name, u.avatar_url
     FROM messages m JOIN users u ON u.id = m.user_id
     WHERE m.id = ?
@@ -267,6 +313,40 @@ router.post('/conversations/:id/send', (req: AuthRequest, res: Response): void =
   // Emit to all conversation members' personal user rooms (works regardless of page)
   emitToConversationMembers(convId, 'new_message', message);
 
+  res.status(201).json(message);
+});
+
+// ── POST /api/messages/conversations/:id/upload — send with file attachment ──
+
+router.post('/conversations/:id/upload', chatUpload.single('file'), (req: AuthRequest, res: Response): void => {
+  const userId = req.user!.id;
+  const convId = parseInt(req.params.id);
+  const text = (req.body.content || '').toString().trim();
+  const file = req.file;
+
+  if (!file) { res.status(400).json({ error: 'File required' }); return; }
+
+  if (!canAccessConversation(userId, convId)) {
+    deleteChatFile(file.filename);
+    res.status(403).json({ error: 'Access denied' });
+    return;
+  }
+
+  const result = db.prepare(`
+    INSERT INTO messages
+      (conversation_id, user_id, content, attachment_filename, attachment_original, attachment_size, attachment_mime)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(convId, userId, text, file.filename, file.originalname, file.size, file.mimetype);
+
+  const message = db.prepare(`
+    SELECT m.id, m.conversation_id, m.user_id, m.content, m.is_deleted, m.created_at, m.updated_at,
+           m.attachment_filename, m.attachment_original, m.attachment_size, m.attachment_mime,
+           u.username, u.display_name, u.avatar_url
+    FROM messages m JOIN users u ON u.id = m.user_id
+    WHERE m.id = ?
+  `).get(result.lastInsertRowid) as any;
+
+  emitToConversationMembers(convId, 'new_message', message);
   res.status(201).json(message);
 });
 
@@ -298,8 +378,22 @@ router.delete('/:messageId', (req: AuthRequest, res: Response): void => {
     }
   }
 
-  db.prepare('UPDATE messages SET is_deleted = 1, content = ? WHERE id = ?')
-    .run('Сообщение удалено', msgId);
+  // If message had a file attachment — delete the file too
+  const msgRow = db.prepare(
+    'SELECT attachment_filename FROM messages WHERE id = ?'
+  ).get(msgId) as { attachment_filename: string | null } | undefined;
+  if (msgRow?.attachment_filename) deleteChatFile(msgRow.attachment_filename);
+
+  db.prepare(`
+    UPDATE messages SET
+      is_deleted = 1,
+      content = ?,
+      attachment_filename = NULL,
+      attachment_original = NULL,
+      attachment_size = NULL,
+      attachment_mime = NULL
+    WHERE id = ?
+  `).run('Сообщение удалено', msgId);
 
   emitToConversationMembers(msg.conversation_id, 'message_deleted', {
     messageId: msgId,

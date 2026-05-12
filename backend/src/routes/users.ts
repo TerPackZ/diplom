@@ -32,10 +32,12 @@ const upload = multer({
   }
 });
 
+const USER_FIELDS = 'id, username, email, display_name, avatar_url, description, dm_permission, created_at';
+
 // GET /api/users/me
 router.get('/me', authenticate, (req: AuthRequest, res: Response): void => {
   const user = db.prepare(
-    'SELECT id, username, email, display_name, avatar_url, description, created_at FROM users WHERE id = ?'
+    `SELECT ${USER_FIELDS} FROM users WHERE id = ?`
   ).get(req.user!.id) as any;
 
   if (!user) {
@@ -48,7 +50,7 @@ router.get('/me', authenticate, (req: AuthRequest, res: Response): void => {
 
 // PUT /api/users/me
 router.put('/me', authenticate, (req: AuthRequest, res: Response): void => {
-  const { display_name, username, description } = req.body;
+  const { display_name, username, description, dm_permission } = req.body;
 
   const updates: string[] = [];
   const values: any[] = [];
@@ -75,6 +77,14 @@ router.put('/me', authenticate, (req: AuthRequest, res: Response): void => {
     updates.push('description = ?');
     values.push(description);
   }
+  if (dm_permission !== undefined) {
+    if (dm_permission !== 'everyone' && dm_permission !== 'friends_only') {
+      res.status(400).json({ error: 'Invalid dm_permission value' });
+      return;
+    }
+    updates.push('dm_permission = ?');
+    values.push(dm_permission);
+  }
 
   if (updates.length === 0) {
     res.status(400).json({ error: 'No fields to update' });
@@ -85,7 +95,7 @@ router.put('/me', authenticate, (req: AuthRequest, res: Response): void => {
   db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 
   const updated = db.prepare(
-    'SELECT id, username, email, display_name, avatar_url, description, created_at FROM users WHERE id = ?'
+    `SELECT ${USER_FIELDS} FROM users WHERE id = ?`
   ).get(req.user!.id) as any;
 
   res.json(updated);
@@ -113,6 +123,22 @@ router.post('/me/avatar', authenticate, upload.single('avatar'), (req: AuthReque
   res.json({ avatar_url: avatarUrl });
 });
 
+function areFriends(a: number, b: number): boolean {
+  return !!db.prepare(`
+    SELECT 1 FROM friendships
+    WHERE status = 'accepted'
+      AND ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?))
+  `).get(a, b, b, a);
+}
+
+function canRequesterMessage(targetId: number, requesterId: number): boolean {
+  if (targetId === requesterId) return false;
+  const target = db.prepare('SELECT dm_permission FROM users WHERE id = ?').get(targetId) as { dm_permission: string } | undefined;
+  if (!target) return false;
+  if (target.dm_permission === 'everyone') return true;
+  return areFriends(targetId, requesterId);
+}
+
 // GET /api/users/search?q=query
 router.get('/search', authenticate, (req: AuthRequest, res: Response): void => {
   const q = (req.query.q as string)?.trim();
@@ -122,10 +148,19 @@ router.get('/search', authenticate, (req: AuthRequest, res: Response): void => {
   }
 
   const users = db.prepare(
-    'SELECT id, username, display_name, avatar_url FROM users WHERE username LIKE ? AND id != ? LIMIT 10'
-  ).all(`%${q}%`, req.user!.id) as any[];
+    `SELECT id, username, display_name, avatar_url, dm_permission
+     FROM users
+     WHERE (username LIKE ? OR display_name LIKE ?) AND id != ?
+     LIMIT 20`
+  ).all(`%${q}%`, `%${q}%`, req.user!.id) as any[];
 
-  res.json(users);
+  res.json(users.map(u => ({
+    id: u.id,
+    username: u.username,
+    display_name: u.display_name,
+    avatar_url: u.avatar_url,
+    can_message: u.dm_permission === 'everyone' || areFriends(u.id, req.user!.id)
+  })));
 });
 
 // GET /api/users/:id - public profile (must be after /search and /me routes)
@@ -145,7 +180,7 @@ router.get('/:id', authenticate, (req: AuthRequest, res: Response): void => {
     return;
   }
 
-  res.json(user);
+  res.json({ ...user, can_message: canRequesterMessage(userId, req.user!.id) });
 });
 
 export default router;

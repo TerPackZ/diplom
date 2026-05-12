@@ -3,9 +3,11 @@ import { useAuth } from '../hooks/useAuth';
 import Avatar from '../components/Avatar';
 import AvatarCropModal from '../components/AvatarCropModal';
 import apiClient from '../api/client';
+import { useToast } from '../context/ToastContext';
 
 export default function ProfilePage() {
   const { user, updateUser } = useAuth();
+  const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [displayName, setDisplayName] = useState(user?.display_name || '');
@@ -185,6 +187,44 @@ export default function ProfilePage() {
               </button>
             </div>
           </form>
+        </div>
+
+        {/* Privacy */}
+        <div className="card" style={{ marginBottom: 'var(--space-lg)' }}>
+          <h3 style={{ fontWeight: 700, marginBottom: 'var(--space-md)', color: 'var(--text-secondary)', fontSize: 'var(--font-size-sm)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Приватность
+          </h3>
+
+          <div className="privacy-row">
+            <div className="privacy-row__info">
+              <div className="privacy-row__title">Сообщения</div>
+              <div className="privacy-row__desc">
+                {user?.dm_permission === 'friends_only'
+                  ? 'Только друзья могут отправлять вам сообщения'
+                  : 'Любой пользователь может отправить вам сообщение'}
+              </div>
+            </div>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={user?.dm_permission !== 'friends_only'}
+                onChange={async (e) => {
+                  const next = e.target.checked ? 'everyone' : 'friends_only';
+                  try {
+                    const res = await apiClient.put('/api/users/me', { dm_permission: next });
+                    updateUser(res.data);
+                    toast.show(
+                      next === 'everyone' ? 'Открыты для всех' : 'Только друзья могут писать',
+                      'success'
+                    );
+                  } catch (err: any) {
+                    toast.show(err.response?.data?.error || 'Ошибка', 'error');
+                  }
+                }}
+              />
+              <span className="toggle__slider" />
+            </label>
+          </div>
         </div>
 
         {/* Account info */}

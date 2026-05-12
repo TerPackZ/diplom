@@ -184,6 +184,21 @@ if (!tasksCols.some(c => c.name === 'due_date')) {
   db.exec('ALTER TABLE tasks ADD COLUMN due_date TEXT');
 }
 
+// Add dm_permission to users
+const usersCols = db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+if (!usersCols.some(c => c.name === 'dm_permission')) {
+  db.exec("ALTER TABLE users ADD COLUMN dm_permission TEXT NOT NULL DEFAULT 'everyone'");
+}
+
+// Add attachment fields to messages
+const messagesCols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
+if (!messagesCols.some(c => c.name === 'attachment_filename')) {
+  db.exec('ALTER TABLE messages ADD COLUMN attachment_filename TEXT');
+  db.exec('ALTER TABLE messages ADD COLUMN attachment_original TEXT');
+  db.exec('ALTER TABLE messages ADD COLUMN attachment_size INTEGER');
+  db.exec('ALTER TABLE messages ADD COLUMN attachment_mime TEXT');
+}
+
 // Backfill: default columns for groups that don't have any yet
 db.exec(`
   INSERT INTO board_columns (group_id, name, position, color, is_completion)

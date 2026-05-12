@@ -8,6 +8,7 @@ export interface User {
   display_name: string | null;
   avatar_url: string | null;
   description: string | null;
+  dm_permission: 'everyone' | 'friends_only';
   created_at: string;
 }
 
