@@ -144,6 +144,8 @@ export default function UserProfilePage() {
               src={profile?.avatar_url}
               name={profile?.display_name || profile?.username}
               size={80}
+              userId={profile?.id}
+              showStatus
             />
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: 'var(--font-size-xl)' }}>

@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Task, BoardColumn } from './TaskCard';
 import type { Member } from './MemberList';
+import Avatar from './Avatar';
 
 interface TaskModalProps {
   task?: Task | null;
   members: Member[];
   columns: BoardColumn[];
   groupId: number;
-  onSave: (data: Partial<Task>) => Promise<void>;
+  onSave: (data: Partial<Task> & { assignees?: number[] }) => Promise<void>;
   onClose: () => void;
 }
 
@@ -18,16 +19,26 @@ const PRIORITIES = [
   { value: 'critical', label: 'Критичный' }
 ];
 
+const ROLE_LABELS: Record<string, string> = {
+  leader: 'Лидер',
+  moderator: 'Модератор',
+  executor: 'Исполнитель'
+};
+
 export default function TaskModal({ task, members, columns, onSave, onClose }: TaskModalProps) {
   const isEdit = !!task;
 
   const [title, setTitle] = useState(task?.title || '');
   const [description, setDescription] = useState(task?.description || '');
   const [priority, setPriority] = useState<Task['priority']>(task?.priority || 'medium');
-  const [columnId, setColumnId] = useState<number>(
-    task?.column_id ?? (columns[0]?.id ?? 0)
+  const [columnId, setColumnId] = useState<number>(task?.column_id ?? (columns[0]?.id ?? 0));
+  const [dueDate, setDueDate] = useState<string>(
+    task?.due_date ? task.due_date.slice(0, 10) : ''
   );
-  const [assignedTo, setAssignedTo] = useState<string>(task?.assigned_to?.toString() || '');
+  const [assigneeIds, setAssigneeIds] = useState<Set<number>>(
+    new Set((task?.assignees ?? []).map(a => a.id))
+  );
+  const [memberFilter, setMemberFilter] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -36,6 +47,24 @@ export default function TaskModal({ task, members, columns, onSave, onClose }: T
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
+
+  const filteredMembers = useMemo(() => {
+    const q = memberFilter.trim().toLowerCase();
+    if (!q) return members;
+    return members.filter(m =>
+      (m.display_name || '').toLowerCase().includes(q) ||
+      m.username.toLowerCase().includes(q)
+    );
+  }, [members, memberFilter]);
+
+  function toggleAssignee(userId: number) {
+    setAssigneeIds(prev => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -50,7 +79,8 @@ export default function TaskModal({ task, members, columns, onSave, onClose }: T
         description: description.trim() || undefined,
         priority,
         column_id: columnId,
-        assigned_to: assignedTo ? Number(assignedTo) : null
+        due_date: dueDate || null,
+        assignees: Array.from(assigneeIds)
       } as any);
       onClose();
     } catch (err: any) {
@@ -126,19 +156,80 @@ export default function TaskModal({ task, members, columns, onSave, onClose }: T
             </div>
 
             <div className="form-group">
-              <label className="form-label">Исполнитель</label>
-              <select
-                className="form-select"
-                value={assignedTo}
-                onChange={(e) => setAssignedTo(e.target.value)}
-              >
-                <option value="">— Не назначен —</option>
-                {members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.display_name || m.username} ({m.role === 'leader' ? 'Лидер' : m.role === 'moderator' ? 'Модератор' : 'Исполнитель'})
-                  </option>
-                ))}
-              </select>
+              <label className="form-label">
+                Срок выполнения
+                {dueDate && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setDueDate('')}
+                    style={{ padding: '2px 8px', fontSize: 'var(--font-size-xs)', marginLeft: 8 }}
+                  >
+                    очистить
+                  </button>
+                )}
+              </label>
+              <input
+                type="date"
+                className="form-input"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <label className="form-label" style={{ marginBottom: 0 }}>
+                  Исполнители {assigneeIds.size > 0 && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({assigneeIds.size})</span>}
+                </label>
+                {assigneeIds.size > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setAssigneeIds(new Set())}
+                    style={{ padding: '2px 8px', fontSize: 'var(--font-size-xs)' }}
+                  >
+                    Очистить
+                  </button>
+                )}
+              </div>
+
+              <input
+                className="form-input"
+                placeholder="Поиск..."
+                value={memberFilter}
+                onChange={(e) => setMemberFilter(e.target.value)}
+                style={{ marginBottom: 6 }}
+              />
+
+              <div className="assignee-picker">
+                {filteredMembers.length === 0 ? (
+                  <div style={{ padding: 'var(--space-sm)', color: 'var(--text-muted)', fontSize: 'var(--font-size-sm)', textAlign: 'center' }}>
+                    Никого не найдено
+                  </div>
+                ) : (
+                  filteredMembers.map(m => {
+                    const checked = assigneeIds.has(m.id);
+                    return (
+                      <label
+                        key={m.id}
+                        className={`assignee-row ${checked ? 'assignee-row--checked' : ''}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleAssignee(m.id)}
+                        />
+                        <Avatar src={m.avatar_url} name={m.display_name || m.username} size={28} userId={m.id} showStatus />
+                        <div className="assignee-row__info">
+                          <div className="assignee-row__name">{m.display_name || m.username}</div>
+                          <div className="assignee-row__role">@{m.username} · {ROLE_LABELS[m.role] || m.role}</div>
+                        </div>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
             </div>
 
             {error && <p className="form-error">{error}</p>}

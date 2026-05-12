@@ -26,6 +26,13 @@ const PRIORITY_FILTERS = [
   { value: 'low',      label: 'Низкий' }
 ];
 
+const DEADLINE_FILTERS = [
+  { value: '',        label: 'Все сроки' },
+  { value: 'overdue', label: 'Просрочено' },
+  { value: 'week',    label: 'На неделе' },
+  { value: 'none',    label: 'Без срока' }
+];
+
 export default function GroupPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -37,6 +44,7 @@ export default function GroupPage() {
   const [columns, setColumns] = useState<BoardColumn[]>([]);
   const [loading, setLoading] = useState(true);
   const [priorityFilter, setPriorityFilter] = useState('');
+  const [deadlineFilter, setDeadlineFilter] = useState('');
   const [taskModal, setTaskModal] = useState<{ open: boolean; task?: Task | null }>({ open: false });
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [detailTask, setDetailTask] = useState<Task | null>(null);
@@ -57,10 +65,11 @@ export default function GroupPage() {
     try {
       const params = new URLSearchParams();
       if (priorityFilter) params.set('priority', priorityFilter);
+      if (deadlineFilter) params.set('deadline', deadlineFilter);
       const res = await apiClient.get(`/api/groups/${groupId}/tasks?${params}`);
       setTasks(res.data);
     } catch { /* ignore */ }
-  }, [groupId, priorityFilter]);
+  }, [groupId, priorityFilter, deadlineFilter]);
 
   const fetchColumns = useCallback(async () => {
     try {
@@ -138,7 +147,7 @@ export default function GroupPage() {
 
   const canChangeColumn = (task: Task) => {
     if (canEdit) return true;
-    if (group.my_role === 'executor' && task.assigned_to === user?.id) return true;
+    if (group.my_role === 'executor' && task.assignees.some(a => a.id === user?.id)) return true;
     return false;
   };
 
@@ -241,12 +250,22 @@ export default function GroupPage() {
           <div>
             {/* Toolbar */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-md)', flexWrap: 'wrap', gap: 'var(--space-sm)' }}>
-              <div className="filter-bar">
+              <div className="filter-bar" style={{ flexWrap: 'wrap' }}>
                 {PRIORITY_FILTERS.map((f) => (
                   <button
                     key={f.value}
                     className={`filter-chip ${priorityFilter === f.value ? 'active' : ''}`}
                     onClick={() => setPriorityFilter(f.value)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+                <span style={{ width: 1, height: 18, background: 'var(--border)', margin: '0 2px' }} />
+                {DEADLINE_FILTERS.map((f) => (
+                  <button
+                    key={f.value}
+                    className={`filter-chip ${deadlineFilter === f.value ? 'active' : ''}`}
+                    onClick={() => setDeadlineFilter(f.value)}
                   >
                     {f.label}
                   </button>

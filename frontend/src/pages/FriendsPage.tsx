@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../api/client';
 import Avatar from '../components/Avatar';
+import EmptyState from '../components/EmptyState';
 import { useToast } from '../context/ToastContext';
 
 interface FriendUser {
@@ -290,13 +291,11 @@ export default function FriendsPage() {
             Мои друзья · {friends.length}
           </h2>
           {friends.length === 0 ? (
-            <div className="empty-state" style={{ padding: 'var(--space-xl)' }}>
-              <div className="empty-state__icon">🤝</div>
-              <p className="empty-state__title">Нет друзей</p>
-              <p className="empty-state__desc">
-                Найдите пользователей через поиск выше и отправьте запрос дружбы
-              </p>
-            </div>
+            <EmptyState
+              kind="friends"
+              title="Пока нет друзей"
+              description="Найдите пользователей через поиск выше и отправьте запрос дружбы"
+            />
           ) : (
             <div
               className="stagger"
@@ -313,7 +312,7 @@ export default function FriendsPage() {
                   style={{ background: 'var(--surface-2)', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}
                 >
                   <div style={{ cursor: 'pointer' }} onClick={() => navigate(`/users/${friend.id}`)}>
-                    <Avatar src={friend.avatar_url} name={friend.display_name || friend.username} size={40} />
+                    <Avatar src={friend.avatar_url} name={friend.display_name || friend.username} size={40} userId={friend.id} showStatus />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>

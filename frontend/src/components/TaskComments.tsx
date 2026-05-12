@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import apiClient from '../api/client';
 import Avatar from './Avatar';
 
@@ -47,215 +47,207 @@ export default function TaskComments({ groupId, taskId }: TaskCommentsProps) {
 
   const currentUserId = JSON.parse(localStorage.getItem('user') || '{}').id;
 
-  useEffect(() => {
-    loadComments();
-  }, [groupId, taskId]);
+  useEffect(() => { loadComments(); /* eslint-disable-next-line */ }, [groupId, taskId]);
 
-  const loadComments = async () => {
+  async function loadComments() {
     setLoading(true);
     try {
       const res = await apiClient.get(`/api/groups/${groupId}/tasks/${taskId}/comments`);
       setComments(res.data);
-    } catch (err) {
-      console.error('Failed to load comments:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!newComment.trim() || submitting) return;
-
     setSubmitting(true);
     try {
       const res = await apiClient.post(`/api/groups/${groupId}/tasks/${taskId}/comments`, {
         content: newComment.trim()
       });
-      setComments([...comments, res.data]);
+      setComments(prev => [...prev, res.data]);
       setNewComment('');
     } catch (err: any) {
       alert(err.response?.data?.error || 'Не удалось добавить комментарий');
     } finally {
       setSubmitting(false);
     }
-  };
+  }
 
-  const handleEdit = async (commentId: number) => {
+  async function handleEdit(commentId: number) {
     if (!editContent.trim()) return;
-
     try {
       const res = await apiClient.put(`/api/groups/${groupId}/tasks/${taskId}/comments/${commentId}`, {
         content: editContent.trim()
       });
-      setComments(comments.map(c => c.id === commentId ? res.data : c));
+      setComments(prev => prev.map(c => c.id === commentId ? res.data : c));
       setEditingId(null);
       setEditContent('');
     } catch (err: any) {
       alert(err.response?.data?.error || 'Не удалось обновить комментарий');
     }
-  };
+  }
 
-  const handleDelete = async (commentId: number) => {
+  async function handleDelete(commentId: number) {
     if (!confirm('Удалить комментарий?')) return;
-
     try {
       await apiClient.delete(`/api/groups/${groupId}/tasks/${taskId}/comments/${commentId}`);
-      setComments(comments.filter(c => c.id !== commentId));
+      setComments(prev => prev.filter(c => c.id !== commentId));
     } catch (err: any) {
       alert(err.response?.data?.error || 'Не удалось удалить комментарий');
     }
-  };
+  }
 
-  const startEdit = (comment: Comment) => {
+  function startEdit(comment: Comment) {
     setEditingId(comment.id);
     setEditContent(comment.content);
-  };
+  }
 
-  const cancelEdit = () => {
+  function cancelEdit() {
     setEditingId(null);
     setEditContent('');
-  };
-
-  if (loading) {
-    return <div style={{ padding: 'var(--space-md)', color: 'var(--text-muted)' }}>Загрузка комментариев...</div>;
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
-        {comments.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-sm)', margin: 0 }}>
-            Комментариев пока нет
-          </p>
-        ) : (
-          comments.map(comment => (
-            <div
-              key={comment.id}
-              style={{
-                padding: 'var(--space-sm)',
-                background: 'var(--surface-2)',
-                borderRadius: 'var(--radius-md)',
-                display: 'flex',
-                gap: 'var(--space-sm)'
-              }}
-            >
-              <Avatar src={comment.avatar_url} name={comment.display_name || comment.username} size={32} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-xs)', marginBottom: 4 }}>
-                  <span style={{ fontWeight: 500, fontSize: 'var(--font-size-sm)' }}>
-                    {comment.display_name || comment.username}
-                  </span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-xs)' }}>
-                    {formatDate(comment.created_at)}
-                  </span>
-                  {comment.created_at !== comment.updated_at && (
-                    <span style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-xs)' }}>
-                      (изменено)
-                    </span>
-                  )}
-                </div>
-                {editingId === comment.id ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xs)' }}>
-                    <textarea
-                      value={editContent}
-                      onChange={(e) => setEditContent(e.target.value)}
-                      style={{
-                        width: '100%',
-                        minHeight: 60,
-                        padding: 'var(--space-xs)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 'var(--radius-sm)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-primary)',
-                        fontSize: 'var(--font-size-sm)',
-                        resize: 'vertical'
-                      }}
-                    />
-                    <div style={{ display: 'flex', gap: 'var(--space-xs)' }}>
-                      <button
-                        className="btn btn-primary"
-                        style={{ fontSize: 'var(--font-size-xs)', padding: '4px 8px' }}
-                        onClick={() => handleEdit(comment.id)}
-                      >
-                        Сохранить
-                      </button>
-                      <button
-                        className="btn btn-secondary"
-                        style={{ fontSize: 'var(--font-size-xs)', padding: '4px 8px' }}
-                        onClick={cancelEdit}
-                      >
-                        Отмена
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <p style={{ margin: 0, fontSize: 'var(--font-size-sm)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                      {comment.content}
-                    </p>
-                    {comment.user_id === currentUserId && (
-                      <div style={{ display: 'flex', gap: 'var(--space-xs)', marginTop: 4 }}>
-                        <button
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            color: 'var(--text-muted)',
-                            fontSize: 'var(--font-size-xs)',
-                            cursor: 'pointer',
-                            padding: 0
-                          }}
-                          onClick={() => startEdit(comment)}
-                        >
-                          Изменить
-                        </button>
-                        <button
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            color: 'var(--text-muted)',
-                            fontSize: 'var(--font-size-xs)',
-                            cursor: 'pointer',
-                            padding: 0
-                          }}
-                          onClick={() => handleDelete(comment.id)}
-                        >
-                          Удалить
-                        </button>
-                      </div>
-                    )}
-                  </>
-                )}
+    <div className="comments">
+      {loading ? (
+        <div className="comments__skeleton">
+          {[1, 2].map(i => (
+            <div key={i} className="comment-skeleton">
+              <div className="skeleton skeleton-circle" />
+              <div className="comment-skeleton__body">
+                <div className="skeleton skeleton-bar" style={{ width: '30%' }} />
+                <div className="skeleton skeleton-bar" style={{ width: '90%' }} />
+                <div className="skeleton skeleton-bar" style={{ width: '60%' }} />
               </div>
             </div>
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      ) : comments.length === 0 ? (
+        <div className="empty-illustration">
+          <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="empty-illustration__svg">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <div className="empty-illustration__title">Пока нет комментариев</div>
+          <div className="empty-illustration__desc">Будь первым кто оставит комментарий</div>
+        </div>
+      ) : (
+        <div className="comments__list">
+          {comments.map(comment => {
+            const isOwn = comment.user_id === currentUserId;
+            const isEditing = editingId === comment.id;
+            const wasEdited = comment.created_at !== comment.updated_at;
 
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xs)' }}>
+            return (
+              <div key={comment.id} className={`comment ${isOwn ? 'comment--own' : ''}`}>
+                <Avatar
+                  src={comment.avatar_url}
+                  name={comment.display_name || comment.username}
+                  size={32}
+                  userId={comment.user_id}
+                  showStatus
+                />
+                <div className="comment__body">
+                  <div className="comment__header">
+                    <span className="comment__author">
+                      {comment.display_name || comment.username}
+                    </span>
+                    <span className="comment__time">{formatDate(comment.created_at)}</span>
+                    {wasEdited && <span className="comment__edited">изменено</span>}
+                  </div>
+
+                  {isEditing ? (
+                    <div className="comment__edit">
+                      <textarea
+                        className="form-textarea"
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        rows={3}
+                        autoFocus
+                      />
+                      <div className="comment__edit-actions">
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={() => handleEdit(comment.id)}
+                        >
+                          Сохранить
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={cancelEdit}
+                        >
+                          Отмена
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="comment__bubble">
+                        {comment.content}
+                      </div>
+                      {isOwn && (
+                        <div className="comment__actions">
+                          <button
+                            type="button"
+                            className="comment__action"
+                            onClick={() => startEdit(comment)}
+                          >
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                            Изменить
+                          </button>
+                          <button
+                            type="button"
+                            className="comment__action comment__action--danger"
+                            onClick={() => handleDelete(comment.id)}
+                          >
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polyline points="3 6 5 6 21 6"/>
+                              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                            </svg>
+                            Удалить
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <form className="comments__form" onSubmit={handleSubmit}>
         <textarea
+          className="form-textarea comments__input"
           value={newComment}
           onChange={(e) => setNewComment(e.target.value)}
-          placeholder="Добавить комментарий..."
-          style={{
-            width: '100%',
-            minHeight: 60,
-            padding: 'var(--space-sm)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            background: 'var(--surface-2)',
-            color: 'var(--text-primary)',
-            fontSize: 'var(--font-size-sm)',
-            resize: 'vertical'
+          placeholder="Написать комментарий..."
+          rows={2}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              handleSubmit(e as any);
+            }
           }}
         />
         <button
           type="submit"
-          className="btn btn-primary"
+          className="btn btn-primary comments__submit"
           disabled={!newComment.trim() || submitting}
-          style={{ alignSelf: 'flex-end', fontSize: 'var(--font-size-sm)' }}
         >
-          {submitting ? 'Отправка...' : 'Отправить'}
+          {submitting ? '...' : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          )}
         </button>
       </form>
     </div>

@@ -8,6 +8,13 @@ interface AuthSocket extends Socket { userId: number; }
 
 let io: SocketServer;
 
+// userId → number of active sockets (a user can have multiple tabs)
+const onlineUsers = new Map<number, number>();
+
+export function getOnlineUserIds(): number[] {
+  return Array.from(onlineUsers.keys());
+}
+
 export function initSocket(server: HttpServer): SocketServer {
   const corsOrigin = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',')
@@ -40,8 +47,25 @@ export function initSocket(server: HttpServer): SocketServer {
     socket.join(`user:${userId}`);
     console.log(`[socket] connect user:${userId} (socket=${socket.id})`);
 
+    // Online presence: increment connection count, broadcast if first connection
+    const prevCount = onlineUsers.get(userId) ?? 0;
+    onlineUsers.set(userId, prevCount + 1);
+    if (prevCount === 0) {
+      io.emit('user_online', { userId });
+    }
+
+    // Send current online list to the new connection
+    socket.emit('online_users', { userIds: getOnlineUserIds() });
+
     socket.on('disconnect', (reason) => {
       console.log(`[socket] disconnect user:${userId} (${reason})`);
+      const cur = onlineUsers.get(userId) ?? 1;
+      if (cur <= 1) {
+        onlineUsers.delete(userId);
+        io.emit('user_offline', { userId });
+      } else {
+        onlineUsers.set(userId, cur - 1);
+      }
     });
 
     socket.on('join_conversation', (conversationId: number) => {

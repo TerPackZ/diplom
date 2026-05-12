@@ -155,6 +155,8 @@ export default function MemberList({ groupId, members, myRole, onUpdate }: Membe
                   src={member.avatar_url}
                   name={member.display_name || member.username}
                   size={32}
+                  userId={member.id}
+                  showStatus
                 />
               </div>
 

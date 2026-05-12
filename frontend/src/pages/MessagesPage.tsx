@@ -4,6 +4,8 @@ import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../context/SocketContext';
 import apiClient from '../api/client';
 import Avatar from '../components/Avatar';
+import EmptyState from '../components/EmptyState';
+import { SkeletonConversationRow, SkeletonMessage } from '../components/Skeleton';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -528,15 +530,15 @@ export default function MessagesPage() {
 
           <div className="chat-sidebar__list">
             {loadingConvs ? (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-xl)' }}>
-                <div className="spinner" style={{ width: 28, height: 28, borderWidth: 2 }} />
-              </div>
+              <>
+                {[1, 2, 3, 4].map(i => <SkeletonConversationRow key={i} />)}
+              </>
             ) : conversations.length === 0 ? (
-              <div className="empty-state" style={{ padding: 'var(--space-xl) var(--space-md)' }}>
-                <div className="empty-state__icon">💬</div>
-                <div className="empty-state__title">Нет чатов</div>
-                <div className="empty-state__desc">Нажмите «Новый чат», чтобы начать переписку</div>
-              </div>
+              <EmptyState
+                kind="chats"
+                title="Пока нет чатов"
+                description="Нажмите «Новый чат», чтобы начать переписку"
+              />
             ) : (
               conversations.map(conv => {
                 const av = convAvatar(conv);
@@ -548,7 +550,13 @@ export default function MessagesPage() {
                     onClick={() => selectConversation(conv)}
                   >
                     <div className="chat-conv-row__avatar">
-                      <Avatar src={av.src} name={av.name} size={44} />
+                      <Avatar
+                        src={av.src}
+                        name={av.name}
+                        size={44}
+                        userId={conv.type === 'direct' ? conv.other_user?.id : undefined}
+                        showStatus={conv.type === 'direct'}
+                      />
                       {conv.type === 'group' && (
                         <span className="chat-conv-row__type-badge">G</span>
                       )}
@@ -595,7 +603,13 @@ export default function MessagesPage() {
                     <polyline points="15 18 9 12 15 6"/>
                   </svg>
                 </button>
-                <Avatar src={convAvatar(activeConv).src} name={convName(activeConv)} size={38} />
+                <Avatar
+                  src={convAvatar(activeConv).src}
+                  name={convName(activeConv)}
+                  size={38}
+                  userId={activeConv.type === 'direct' ? activeConv.other_user?.id : undefined}
+                  showStatus={activeConv.type === 'direct'}
+                />
                 <div className="chat-window__header-info">
                   <div className="chat-window__header-name">{convName(activeConv)}</div>
                   <div className="chat-window__header-sub">
@@ -609,15 +623,18 @@ export default function MessagesPage() {
 
               <div className="chat-messages">
                 {loadingMsgs ? (
-                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-                    <div className="spinner" />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <SkeletonMessage />
+                    <SkeletonMessage own />
+                    <SkeletonMessage />
+                    <SkeletonMessage own />
                   </div>
                 ) : messages.length === 0 ? (
-                  <div className="empty-state" style={{ height: '100%' }}>
-                    <div className="empty-state__icon">💬</div>
-                    <div className="empty-state__title">Нет сообщений</div>
-                    <div className="empty-state__desc">Напишите первым!</div>
-                  </div>
+                  <EmptyState
+                    kind="messages"
+                    title="Нет сообщений"
+                    description="Напишите первым, чтобы начать диалог"
+                  />
                 ) : (
                   renderMessages()
                 )}

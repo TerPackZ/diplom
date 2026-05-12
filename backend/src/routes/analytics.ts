@@ -230,9 +230,15 @@ router.get('/contributors', (req: AuthRequest, res: Response): void => {
 
   const rows = db.prepare(`
     SELECT u.id, u.username, u.display_name, u.avatar_url,
-      (SELECT COUNT(*) FROM tasks WHERE group_id = ? AND assigned_to = u.id) as total_assigned,
-      (SELECT COUNT(*) FROM tasks WHERE group_id = ? AND assigned_to = u.id AND status = 'done') as completed,
-      (SELECT COUNT(*) FROM tasks WHERE group_id = ? AND assigned_to = u.id AND status != 'done') as open,
+      (SELECT COUNT(*) FROM tasks t
+        JOIN task_assignees ta ON ta.task_id = t.id
+        WHERE t.group_id = ? AND ta.user_id = u.id) as total_assigned,
+      (SELECT COUNT(*) FROM tasks t
+        JOIN task_assignees ta ON ta.task_id = t.id
+        WHERE t.group_id = ? AND ta.user_id = u.id AND t.status = 'done') as completed,
+      (SELECT COUNT(*) FROM tasks t
+        JOIN task_assignees ta ON ta.task_id = t.id
+        WHERE t.group_id = ? AND ta.user_id = u.id AND t.status != 'done') as open,
       (SELECT COUNT(*) FROM tasks WHERE group_id = ? AND created_by = u.id) as created
     FROM users u
     JOIN group_members gm ON gm.user_id = u.id

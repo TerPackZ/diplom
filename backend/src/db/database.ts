@@ -175,10 +175,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_board_columns_group ON board_columns(group_id, position);
 `);
 
-// Add column_id to tasks if not already present (SQLite migration pattern)
+// Add column_id and due_date to tasks if not already present (SQLite migration pattern)
 const tasksCols = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
 if (!tasksCols.some(c => c.name === 'column_id')) {
   db.exec('ALTER TABLE tasks ADD COLUMN column_id INTEGER REFERENCES board_columns(id) ON DELETE SET NULL');
+}
+if (!tasksCols.some(c => c.name === 'due_date')) {
+  db.exec('ALTER TABLE tasks ADD COLUMN due_date TEXT');
 }
 
 // Backfill: default columns for groups that don't have any yet
@@ -207,6 +210,28 @@ db.exec(`
     LIMIT 1
   )
   WHERE column_id IS NULL;
+`);
+
+// Many-to-many: tasks ↔ users (assignees)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS task_assignees (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(task_id, user_id),
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_task_assignees_task ON task_assignees(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_assignees_user ON task_assignees(user_id);
+`);
+
+// Backfill: copy existing single-assignee tasks into the join table
+db.exec(`
+  INSERT OR IGNORE INTO task_assignees (task_id, user_id)
+  SELECT id, assigned_to FROM tasks WHERE assigned_to IS NOT NULL;
 `);
 
 // Backfill: seed an initial history row for tasks that don't have any history yet

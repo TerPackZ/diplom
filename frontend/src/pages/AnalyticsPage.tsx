@@ -7,6 +7,7 @@ import {
 } from 'recharts';
 import apiClient from '../api/client';
 import Avatar from '../components/Avatar';
+import { SkeletonAnalyticsCard, SkeletonBar } from '../components/Skeleton';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -201,9 +202,19 @@ export default function AnalyticsPage() {
   if (loading) {
     return (
       <div className="page-content">
-        <div className="container" style={{ paddingTop: 'var(--space-xl)' }}>
-          <div className="loading-page" style={{ minHeight: 300 }}>
-            <div className="spinner" />
+        <div className="container" style={{ paddingTop: 'var(--space-xl)', paddingBottom: 'var(--space-3xl)' }}>
+          <div style={{ marginBottom: 'var(--space-xl)' }}>
+            <SkeletonBar width={140} height={30} />
+            <div style={{ height: 8 }} />
+            <SkeletonBar width={200} height={14} />
+          </div>
+          <div className="analytics-cards">
+            {[1, 2, 3, 4, 5].map(i => <SkeletonAnalyticsCard key={i} />)}
+          </div>
+          <div className="analytics-section">
+            <SkeletonBar width="40%" height={20} />
+            <div style={{ height: 16 }} />
+            <SkeletonBar width="100%" height={280} />
           </div>
         </div>
       </div>

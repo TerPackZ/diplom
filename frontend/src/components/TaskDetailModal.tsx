@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Task } from './TaskCard';
+import { getDeadlineInfo } from './TaskCard';
 import Avatar from './Avatar';
 import TaskComments from './TaskComments';
 import TaskAttachments from './TaskAttachments';
@@ -139,21 +140,56 @@ export default function TaskDetailModal({ task, canEdit, onEdit, onClose, groupI
             </p>
           )}
 
-          {/* Assignee */}
-          <div className="task-detail__section">
-            <div className="task-detail__label">Исполнитель</div>
-            {task.assigned_to_name ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Avatar src={task.assigned_to_avatar} name={task.assigned_to_name} size={24} />
-                <span>{task.assigned_to_name}</span>
-                {task.assigned_to_username && (
-                  <span style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-sm)' }}>
-                    @{task.assigned_to_username}
+          {/* Deadline */}
+          {task.due_date && (() => {
+            const dl = getDeadlineInfo(task.due_date, task.status === 'done');
+            return (
+              <div className="task-detail__section">
+                <div className="task-detail__label">Срок выполнения</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span className={`badge badge-deadline badge-deadline--${dl?.severity ?? 'later'}`}>
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10"/>
+                      <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                    {dl?.label ?? task.due_date}
                   </span>
-                )}
+                  <span style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-sm)' }}>
+                    {new Date(task.due_date.length <= 10 ? task.due_date + 'T00:00:00' : task.due_date)
+                      .toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  </span>
+                </div>
               </div>
+            );
+          })()}
+
+          {/* Assignees */}
+          <div className="task-detail__section">
+            <div className="task-detail__label">
+              Исполнители {task.assignees.length > 0 && <span style={{ color: 'var(--text-muted)' }}>· {task.assignees.length}</span>}
+            </div>
+            {task.assignees.length === 0 ? (
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-sm)' }}>Никто не назначен</span>
             ) : (
-              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-sm)' }}>Не назначен</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {task.assignees.map(a => (
+                  <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Avatar
+                      src={a.avatar_url}
+                      name={a.display_name || a.username}
+                      size={24}
+                      userId={a.id}
+                      showStatus
+                    />
+                    <span style={{ fontSize: 'var(--font-size-sm)', fontWeight: 600 }}>
+                      {a.display_name || a.username}
+                    </span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-xs)' }}>
+                      @{a.username}
+                    </span>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
 

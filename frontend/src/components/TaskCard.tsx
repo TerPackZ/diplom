@@ -9,6 +9,13 @@ export interface BoardColumn {
   is_completion: boolean;
 }
 
+export interface Assignee {
+  id: number;
+  username: string;
+  display_name: string | null;
+  avatar_url: string | null;
+}
+
 export interface Task {
   id: number;
   title: string;
@@ -16,15 +23,46 @@ export interface Task {
   priority: 'low' | 'medium' | 'high' | 'critical';
   status: 'todo' | 'in_progress' | 'done';
   column_id: number | null;
+  due_date: string | null;
   created_by: number;
-  assigned_to: number | null;
+  assignees: Assignee[];
   created_by_username: string;
   created_by_name: string | null;
-  assigned_to_username: string | null;
-  assigned_to_name: string | null;
-  assigned_to_avatar: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type DeadlineSeverity = 'overdue' | 'today' | 'soon' | 'later' | 'done';
+
+export interface DeadlineInfo {
+  severity: DeadlineSeverity;
+  label: string;
+  short: string;
+}
+
+export function getDeadlineInfo(dueDate: string | null, isDone: boolean): DeadlineInfo | null {
+  if (!dueDate) return null;
+  const due = new Date(dueDate.length <= 10 ? `${dueDate}T23:59:59` : dueDate);
+  if (Number.isNaN(due.getTime())) return null;
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+  const diffDays = Math.round((dueDay.getTime() - today.getTime()) / 86_400_000);
+
+  const short = due.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+
+  if (isDone) {
+    return { severity: 'done', label: short, short };
+  }
+  if (diffDays < 0) {
+    const days = Math.abs(diffDays);
+    return { severity: 'overdue', label: days === 1 ? 'Просрочено на день' : `Просрочено на ${days} дн.`, short };
+  }
+  if (diffDays === 0) return { severity: 'today', label: 'Сегодня', short };
+  if (diffDays === 1) return { severity: 'soon', label: 'Завтра', short };
+  if (diffDays <= 3) return { severity: 'soon', label: `Через ${diffDays} дн.`, short };
+  return { severity: 'later', label: short, short };
 }
 
 interface TaskCardProps {
@@ -54,6 +92,8 @@ export default function TaskCard({
     e.stopPropagation();
     onColumnChange?.(task.id, parseInt(e.target.value));
   };
+
+  const assignees = task.assignees || [];
 
   return (
     <div
@@ -105,6 +145,19 @@ export default function TaskCard({
           <span className={`priority-dot priority-dot-${task.priority}`} />
           {PRIORITY_LABELS[task.priority]}
         </span>
+        {(() => {
+          const dl = getDeadlineInfo(task.due_date, task.status === 'done');
+          if (!dl) return null;
+          return (
+            <span className={`badge badge-deadline badge-deadline--${dl.severity}`}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+              {dl.label}
+            </span>
+          );
+        })()}
       </div>
 
       {onColumnChange && (
@@ -123,15 +176,39 @@ export default function TaskCard({
         </div>
       )}
 
-      {task.assigned_to_name && (
-        <div className="task-card__assignee">
-          <Avatar
-            src={task.assigned_to_avatar}
-            name={task.assigned_to_name}
-            size={16}
-          />
-          <span>{task.assigned_to_name}</span>
+      {assignees.length > 0 && (
+        <div className="task-card__assignees">
+          <AssigneeStack assignees={assignees} />
+          {assignees.length === 1 && (
+            <span className="task-card__assignee-name">
+              {assignees[0].display_name || assignees[0].username}
+            </span>
+          )}
         </div>
+      )}
+    </div>
+  );
+}
+
+export function AssigneeStack({ assignees, size = 22, max = 3 }: { assignees: Assignee[]; size?: number; max?: number }) {
+  const visible = assignees.slice(0, max);
+  const extra = assignees.length - visible.length;
+
+  return (
+    <div className="avatar-stack" style={{ ['--stack-size' as any]: `${size}px` }}>
+      {visible.map(a => (
+        <span key={a.id} className="avatar-stack__item" title={a.display_name || a.username}>
+          <Avatar src={a.avatar_url} name={a.display_name || a.username} size={size} userId={a.id} showStatus />
+        </span>
+      ))}
+      {extra > 0 && (
+        <span
+          className="avatar-stack__more"
+          style={{ width: size, height: size, fontSize: size * 0.4 }}
+          title={`Ещё ${extra}`}
+        >
+          +{extra}
+        </span>
       )}
     </div>
   );

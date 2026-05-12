@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import apiClient from '../api/client';
 import GroupCard from '../components/GroupCard';
+import EmptyState from '../components/EmptyState';
+import { SkeletonGroupCard } from '../components/Skeleton';
 
 interface Group {
   id: number;
@@ -130,18 +132,26 @@ export default function DashboardPage() {
 
         {/* Groups grid */}
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 'var(--space-3xl)' }}>
-            <div className="spinner" />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+              gap: 'var(--space-md)'
+            }}
+          >
+            {[1, 2, 3].map(i => <SkeletonGroupCard key={i} />)}
           </div>
         ) : groups.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-state__icon">🗂️</div>
-            <p className="empty-state__title">Нет групп</p>
-            <p className="empty-state__desc">Создайте первую группу, чтобы начать работу</p>
-            <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
-              Создать группу
-            </button>
-          </div>
+          <EmptyState
+            kind="groups"
+            title="Пока нет групп"
+            description="Создайте первую группу, чтобы начать работать над задачами вместе"
+            action={
+              <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+                Создать группу
+              </button>
+            }
+          />
         ) : (
           <div
             className="stagger"
