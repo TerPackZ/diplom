@@ -55,6 +55,12 @@ interface ReplyInfo {
   display_name: string | null;
 }
 
+interface ReactionGroup {
+  emoji: string;
+  count: number;
+  by_me: boolean;
+}
+
 interface Message {
   id: number;
   conversation_id: number;
@@ -72,7 +78,10 @@ interface Message {
   attachment_mime: string | null;
   reply_to_message_id: number | null;
   reply_to: ReplyInfo | null;
+  reactions: ReactionGroup[];
 }
+
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '🔥', '😮', '😢', '👏', '👎'];
 
 interface Friend {
   id: number;
@@ -332,6 +341,7 @@ export default function MessagesPage() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [flashMsgId, setFlashMsgId] = useState<number | null>(null);
+  const [pickerForMsgId, setPickerForMsgId] = useState<number | null>(null);
 
   // ── Load conversations ──
 
@@ -542,11 +552,34 @@ export default function MessagesPage() {
       ));
     };
 
+    const handleReaction = ({ messageId, userId: reactorId, emoji, action }: {
+      messageId: number; conversationId: number; userId: number; emoji: string; action: 'add' | 'remove';
+    }) => {
+      // Skip own reactions — they were applied optimistically already
+      if (reactorId === user?.id) return;
+      // Inline minimal version (avoids hoisting of applyReactionChange)
+      setMessages(prev => prev.map(m => {
+        if (m.id !== messageId) return m;
+        const groups = [...(m.reactions || [])];
+        const idx = groups.findIndex(g => g.emoji === emoji);
+        if (action === 'add') {
+          if (idx === -1) groups.push({ emoji, count: 1, by_me: false });
+          else groups[idx] = { ...groups[idx], count: groups[idx].count + 1 };
+        } else if (idx !== -1) {
+          const next = { ...groups[idx], count: groups[idx].count - 1 };
+          if (next.count <= 0) groups.splice(idx, 1);
+          else groups[idx] = next;
+        }
+        return { ...m, reactions: groups };
+      }));
+    };
+
     socket.on('new_message', handleNewMessage);
     socket.on('message_deleted', handleMessageDeleted);
     socket.on('user_typing', handleUserTyping);
     socket.on('user_stop_typing', handleUserStopTyping);
     socket.on('conversation_read', handleConversationRead);
+    socket.on('message_reaction', handleReaction);
 
     return () => {
       socket.off('new_message', handleNewMessage);
@@ -554,6 +587,7 @@ export default function MessagesPage() {
       socket.off('user_typing', handleUserTyping);
       socket.off('user_stop_typing', handleUserStopTyping);
       socket.off('conversation_read', handleConversationRead);
+      socket.off('message_reaction', handleReaction);
     };
   }, [socket, activeConvId, user?.id, loadConversations]);
 
@@ -680,6 +714,59 @@ export default function MessagesPage() {
     setReplyTo(msg);
     inputRef.current?.focus();
   }, []);
+
+  // Close emoji picker when clicking outside
+  useEffect(() => {
+    if (pickerForMsgId === null) return;
+    const handler = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest('.chat-msg__reaction-picker') && !t.closest('.chat-msg__action-react')) {
+        setPickerForMsgId(null);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [pickerForMsgId]);
+
+  // Apply a reaction change to local state (used by both REST + socket)
+  const applyReactionChange = useCallback((
+    messageId: number,
+    emoji: string,
+    action: 'add' | 'remove',
+    byMe: boolean
+  ) => {
+    setMessages(prev => prev.map(m => {
+      if (m.id !== messageId) return m;
+      const groups = [...(m.reactions || [])];
+      const idx = groups.findIndex(g => g.emoji === emoji);
+      if (action === 'add') {
+        if (idx === -1) groups.push({ emoji, count: 1, by_me: byMe });
+        else groups[idx] = { ...groups[idx], count: groups[idx].count + 1, by_me: groups[idx].by_me || byMe };
+      } else {
+        if (idx !== -1) {
+          const next = { ...groups[idx], count: groups[idx].count - 1, by_me: byMe ? false : groups[idx].by_me };
+          if (next.count <= 0) groups.splice(idx, 1);
+          else groups[idx] = next;
+        }
+      }
+      return { ...m, reactions: groups };
+    }));
+  }, []);
+
+  // Toggle a reaction on a message
+  const toggleReaction = useCallback(async (messageId: number, emoji: string) => {
+    // Optimistic update
+    const msg = messages.find(m => m.id === messageId);
+    const had = msg?.reactions.some(r => r.emoji === emoji && r.by_me);
+    applyReactionChange(messageId, emoji, had ? 'remove' : 'add', true);
+
+    try {
+      await apiClient.post(`/api/messages/messages/${messageId}/reactions`, { emoji });
+    } catch {
+      // revert
+      applyReactionChange(messageId, emoji, had ? 'add' : 'remove', true);
+    }
+  }, [messages, applyReactionChange]);
 
   // Toggle mute for the active conversation
   const toggleMute = useCallback(async () => {
@@ -843,6 +930,21 @@ export default function MessagesPage() {
               {!msg.is_deleted && (
                 <div className="chat-msg__actions">
                   <button
+                    className="chat-msg__action chat-msg__action-react"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPickerForMsgId(prev => prev === msg.id ? null : msg.id);
+                    }}
+                    title="Реакция"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10"/>
+                      <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+                      <line x1="9" y1="9" x2="9.01" y2="9"/>
+                      <line x1="15" y1="9" x2="15.01" y2="9"/>
+                    </svg>
+                  </button>
+                  <button
                     className="chat-msg__action"
                     onClick={(e) => { e.stopPropagation(); startReply(msg); }}
                     title="Ответить"
@@ -865,7 +967,41 @@ export default function MessagesPage() {
                   )}
                 </div>
               )}
+              {pickerForMsgId === msg.id && (
+                <div className="chat-msg__reaction-picker" onClick={e => e.stopPropagation()}>
+                  {REACTION_EMOJIS.map(emoji => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      className="chat-msg__reaction-pick"
+                      onClick={() => {
+                        toggleReaction(msg.id, emoji);
+                        setPickerForMsgId(null);
+                      }}
+                      title={emoji}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
+            {!msg.is_deleted && msg.reactions && msg.reactions.length > 0 && (
+              <div className="chat-msg__reactions">
+                {msg.reactions.map(r => (
+                  <button
+                    key={r.emoji}
+                    type="button"
+                    className={`chat-reaction ${r.by_me ? 'chat-reaction--mine' : ''}`}
+                    onClick={(e) => { e.stopPropagation(); toggleReaction(msg.id, r.emoji); }}
+                    title={r.by_me ? 'Убрать реакцию' : 'Добавить реакцию'}
+                  >
+                    <span className="chat-reaction__emoji">{r.emoji}</span>
+                    {r.count > 1 && <span className="chat-reaction__count">{r.count}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       );

@@ -66,7 +66,43 @@ const MESSAGE_SELECT = `
   LEFT JOIN users ru ON ru.id = r.user_id
 `;
 
-function enrichMessage(row: any): any {
+function getMessageReactions(messageId: number, viewerId: number) {
+  return db.prepare(`
+    SELECT emoji,
+           COUNT(*) as count,
+           MAX(CASE WHEN user_id = ? THEN 1 ELSE 0 END) as by_me
+    FROM message_reactions
+    WHERE message_id = ?
+    GROUP BY emoji
+    ORDER BY MIN(created_at) ASC
+  `).all(viewerId, messageId) as { emoji: string; count: number; by_me: number }[];
+}
+
+function attachReactionsBulk(rows: any[], viewerId: number): any[] {
+  if (rows.length === 0) return rows;
+  const ids = rows.map(r => r.id);
+  const placeholders = ids.map(() => '?').join(',');
+  const all = db.prepare(`
+    SELECT message_id, emoji,
+           COUNT(*) as count,
+           MAX(CASE WHEN user_id = ? THEN 1 ELSE 0 END) as by_me,
+           MIN(created_at) as first_at
+    FROM message_reactions
+    WHERE message_id IN (${placeholders})
+    GROUP BY message_id, emoji
+    ORDER BY first_at ASC
+  `).all(viewerId, ...ids) as { message_id: number; emoji: string; count: number; by_me: number }[];
+
+  const byMsg = new Map<number, { emoji: string; count: number; by_me: boolean }[]>();
+  for (const r of all) {
+    const arr = byMsg.get(r.message_id) || [];
+    arr.push({ emoji: r.emoji, count: r.count, by_me: !!r.by_me });
+    byMsg.set(r.message_id, arr);
+  }
+  return rows.map(r => ({ ...r, reactions: byMsg.get(r.id) || [] }));
+}
+
+function enrichMessage(row: any, viewerId?: number): any {
   if (!row) return row;
   const reply = row._reply_id ? {
     id: row._reply_id,
@@ -80,6 +116,13 @@ function enrichMessage(row: any): any {
   } : null;
   const cleaned: any = { ...row, reply_to: reply };
   for (const k of Object.keys(cleaned)) if (k.startsWith('_')) delete cleaned[k];
+
+  if (viewerId !== undefined) {
+    cleaned.reactions = getMessageReactions(row.id, viewerId)
+      .map(r => ({ emoji: r.emoji, count: r.count, by_me: !!r.by_me }));
+  } else {
+    cleaned.reactions = [];
+  }
   return cleaned;
 }
 
@@ -352,7 +395,10 @@ router.get('/conversations/:id/messages', (req: AuthRequest, res: Response): voi
     : db.prepare(`${MESSAGE_SELECT} WHERE m.conversation_id = ? ORDER BY m.id DESC LIMIT ?`)
         .all(convId, limit);
 
-  res.json((rows as any[]).map(enrichMessage).reverse());
+  // Enrich reply_to fields message-by-message, then bulk-attach reactions
+  const enriched = (rows as any[]).map(r => enrichMessage(r)); // empty reactions
+  const withReactions = attachReactionsBulk(enriched, userId);
+  res.json(withReactions.reverse());
 });
 
 // ── POST /api/messages/conversations/:id/send ───────────────────────────────
@@ -386,7 +432,8 @@ router.post('/conversations/:id/send', (req: AuthRequest, res: Response): void =
   ).run(convId, userId, content.trim(), replyId);
 
   const message = enrichMessage(
-    db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(result.lastInsertRowid)
+    db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(result.lastInsertRowid),
+    userId
   );
 
   broadcastMessage(convId, message);
@@ -423,7 +470,8 @@ router.post('/conversations/:id/upload', chatUpload.single('file'), (req: AuthRe
   `).run(convId, userId, text, file.filename, file.originalname, file.size, file.mimetype, replyId);
 
   const message = enrichMessage(
-    db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(result.lastInsertRowid)
+    db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(result.lastInsertRowid),
+    userId
   );
 
   broadcastMessage(convId, message);
@@ -535,6 +583,70 @@ router.patch('/conversations/:id/mute', (req: AuthRequest, res: Response): void 
   `).run(convId, userId, isMuted);
 
   res.json({ ok: true, is_muted: !!isMuted });
+});
+
+// ── POST /api/messages/messages/:messageId/reactions — toggle a reaction ────
+
+const ALLOWED_EMOJIS = ['👍', '❤️', '😂', '🔥', '😮', '😢', '👏', '👎'];
+
+router.post('/messages/:messageId/reactions', (req: AuthRequest, res: Response): void => {
+  const userId = req.user!.id;
+  const msgId = parseInt(req.params.messageId);
+  const { emoji } = req.body;
+
+  if (!emoji || typeof emoji !== 'string' || !ALLOWED_EMOJIS.includes(emoji)) {
+    res.status(400).json({ error: 'Invalid emoji' }); return;
+  }
+
+  const msg = db.prepare(
+    'SELECT id, conversation_id, is_deleted FROM messages WHERE id = ?'
+  ).get(msgId) as { id: number; conversation_id: number; is_deleted: number } | undefined;
+  if (!msg) { res.status(404).json({ error: 'Message not found' }); return; }
+  if (msg.is_deleted) { res.status(400).json({ error: 'Message is deleted' }); return; }
+  if (!canAccessConversation(userId, msg.conversation_id)) {
+    res.status(403).json({ error: 'Access denied' }); return;
+  }
+
+  // Toggle: insert if missing, delete if present
+  const existing = db.prepare(
+    'SELECT id FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?'
+  ).get(msgId, userId, emoji) as { id: number } | undefined;
+
+  let action: 'add' | 'remove';
+  if (existing) {
+    db.prepare('DELETE FROM message_reactions WHERE id = ?').run(existing.id);
+    action = 'remove';
+  } else {
+    db.prepare(
+      'INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)'
+    ).run(msgId, userId, emoji);
+    action = 'add';
+  }
+
+  // Notify all conversation members. Each frontend recomputes by_me locally
+  // from the userId in the payload, so we can send one canonical event.
+  try {
+    const io = getIo();
+    if (io) {
+      const memberIds = getConversationMemberIds(msg.conversation_id);
+      for (const uid of memberIds) {
+        io.to(`user:${uid}`).emit('message_reaction', {
+          messageId: msgId,
+          conversationId: msg.conversation_id,
+          userId,
+          emoji,
+          action
+        });
+      }
+    }
+  } catch { /* ignore */ }
+
+  res.json({
+    ok: true,
+    action,
+    reactions: getMessageReactions(msgId, userId)
+      .map(r => ({ emoji: r.emoji, count: r.count, by_me: !!r.by_me }))
+  });
 });
 
 export default router;

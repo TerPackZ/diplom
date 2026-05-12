@@ -203,6 +203,22 @@ if (!messagesCols.some(c => c.name === 'reply_to_message_id')) {
   db.exec('ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL');
 }
 
+// Reactions on messages
+db.exec(`
+  CREATE TABLE IF NOT EXISTS message_reactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    emoji TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(message_id, user_id, emoji),
+    FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions(message_id);
+`);
+
 // Mute per (conversation, user)
 const readsCols = db.prepare("PRAGMA table_info(conversation_reads)").all() as { name: string }[];
 if (!readsCols.some(c => c.name === 'is_muted')) {
