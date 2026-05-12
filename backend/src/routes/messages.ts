@@ -46,6 +46,43 @@ function areFriends(a: number, b: number): boolean {
   `).get(a, b, b, a);
 }
 
+// Single SELECT used everywhere; LEFT JOIN brings the replied-to message info
+const MESSAGE_SELECT = `
+  SELECT m.id, m.conversation_id, m.user_id, m.content, m.is_deleted, m.created_at, m.updated_at,
+         m.attachment_filename, m.attachment_original, m.attachment_size, m.attachment_mime,
+         m.reply_to_message_id,
+         u.username, u.display_name, u.avatar_url,
+         r.id as _reply_id,
+         r.content as _reply_content,
+         r.user_id as _reply_user_id,
+         r.is_deleted as _reply_is_deleted,
+         r.attachment_original as _reply_attachment_original,
+         r.attachment_mime as _reply_attachment_mime,
+         ru.username as _reply_username,
+         ru.display_name as _reply_display_name
+  FROM messages m
+  JOIN users u ON u.id = m.user_id
+  LEFT JOIN messages r ON r.id = m.reply_to_message_id
+  LEFT JOIN users ru ON ru.id = r.user_id
+`;
+
+function enrichMessage(row: any): any {
+  if (!row) return row;
+  const reply = row._reply_id ? {
+    id: row._reply_id,
+    content: row._reply_content,
+    user_id: row._reply_user_id,
+    is_deleted: row._reply_is_deleted,
+    attachment_original: row._reply_attachment_original,
+    attachment_mime: row._reply_attachment_mime,
+    username: row._reply_username,
+    display_name: row._reply_display_name
+  } : null;
+  const cleaned: any = { ...row, reply_to: reply };
+  for (const k of Object.keys(cleaned)) if (k.startsWith('_')) delete cleaned[k];
+  return cleaned;
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 function getConversationMemberIds(conversationId: number): number[] {
@@ -75,6 +112,30 @@ function emitToConversationMembers(conversationId: number, event: string, payloa
   console.log(`[socket] emit ${event} → ${memberIds.length} members of conv:${conversationId}`);
 }
 
+// Broadcast new message:
+//  - 'new_message' → all members (updates sidebar / unread counter)
+//  - 'chat_notification' → all members except the sender AND except those who muted this conv
+function broadcastMessage(conversationId: number, message: any): void {
+  const io = getIo();
+  if (!io) return;
+  const memberIds = getConversationMemberIds(conversationId);
+
+  const mutedStmt = db.prepare(
+    'SELECT is_muted FROM conversation_reads WHERE conversation_id = ? AND user_id = ?'
+  );
+
+  for (const uid of memberIds) {
+    io.to(`user:${uid}`).emit('new_message', message);
+
+    if (uid === message.user_id) continue;
+    const row = mutedStmt.get(conversationId, uid) as { is_muted: number } | undefined;
+    if (row?.is_muted) continue;
+
+    io.to(`user:${uid}`).emit('chat_notification', message);
+  }
+  console.log(`[socket] broadcast message → ${memberIds.length} members of conv:${conversationId}`);
+}
+
 function getConversationWithMeta(conversationId: number, userId: number) {
   const conv = db.prepare('SELECT id, type, group_id, created_at FROM conversations WHERE id = ?')
     .get(conversationId) as { id: number; type: string; group_id: number | null; created_at: string } | undefined;
@@ -89,9 +150,10 @@ function getConversationWithMeta(conversationId: number, userId: number) {
   `).get(conversationId) as any;
 
   const readRow = db.prepare(
-    'SELECT last_read_message_id FROM conversation_reads WHERE conversation_id = ? AND user_id = ?'
-  ).get(conversationId, userId) as { last_read_message_id: number } | undefined;
+    'SELECT last_read_message_id, is_muted FROM conversation_reads WHERE conversation_id = ? AND user_id = ?'
+  ).get(conversationId, userId) as { last_read_message_id: number; is_muted: number } | undefined;
   const lastRead = readRow?.last_read_message_id ?? 0;
+  const isMuted = !!readRow?.is_muted;
 
   const unreadCount = (db.prepare(
     'SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ? AND id > ? AND user_id != ? AND is_deleted = 0'
@@ -104,14 +166,33 @@ function getConversationWithMeta(conversationId: number, userId: number) {
       JOIN users u ON u.id = cm.user_id
       WHERE cm.conversation_id = ? AND cm.user_id != ?
     `).get(conversationId, userId) as any;
-    return { ...conv, other_user: other, last_message: lastMessage ?? null, unread_count: unreadCount };
+
+    // What's the highest message id the OTHER user has read? Used for "✓✓" receipts.
+    const otherReadRow = other ? db.prepare(
+      'SELECT last_read_message_id FROM conversation_reads WHERE conversation_id = ? AND user_id = ?'
+    ).get(conversationId, other.id) as { last_read_message_id: number } | undefined : undefined;
+
+    return {
+      ...conv,
+      other_user: other,
+      last_message: lastMessage ?? null,
+      unread_count: unreadCount,
+      is_muted: isMuted,
+      other_last_read_id: otherReadRow?.last_read_message_id ?? 0
+    };
   }
 
   const group = db.prepare('SELECT id, name FROM groups WHERE id = ?').get(conv.group_id) as any;
   const memberCount = (db.prepare(
     'SELECT COUNT(*) as cnt FROM group_members WHERE group_id = ?'
   ).get(conv.group_id) as { cnt: number }).cnt;
-  return { ...conv, group, member_count: memberCount, last_message: lastMessage ?? null, unread_count: unreadCount };
+  return {
+    ...conv, group, member_count: memberCount,
+    last_message: lastMessage ?? null,
+    unread_count: unreadCount,
+    is_muted: isMuted,
+    other_last_read_id: 0
+  };
 }
 
 // ── GET /api/messages/conversations ─────────────────────────────────────────
@@ -266,53 +347,49 @@ router.get('/conversations/:id/messages', (req: AuthRequest, res: Response): voi
   }
 
   const rows = before
-    ? db.prepare(`
-        SELECT m.id, m.conversation_id, m.user_id, m.content, m.is_deleted, m.created_at, m.updated_at,
-               m.attachment_filename, m.attachment_original, m.attachment_size, m.attachment_mime,
-               u.username, u.display_name, u.avatar_url
-        FROM messages m JOIN users u ON u.id = m.user_id
-        WHERE m.conversation_id = ? AND m.id < ?
-        ORDER BY m.id DESC LIMIT ?
-      `).all(convId, before, limit)
-    : db.prepare(`
-        SELECT m.id, m.conversation_id, m.user_id, m.content, m.is_deleted, m.created_at, m.updated_at,
-               m.attachment_filename, m.attachment_original, m.attachment_size, m.attachment_mime,
-               u.username, u.display_name, u.avatar_url
-        FROM messages m JOIN users u ON u.id = m.user_id
-        WHERE m.conversation_id = ?
-        ORDER BY m.id DESC LIMIT ?
-      `).all(convId, limit);
+    ? db.prepare(`${MESSAGE_SELECT} WHERE m.conversation_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?`)
+        .all(convId, before, limit)
+    : db.prepare(`${MESSAGE_SELECT} WHERE m.conversation_id = ? ORDER BY m.id DESC LIMIT ?`)
+        .all(convId, limit);
 
-  res.json((rows as any[]).reverse());
+  res.json((rows as any[]).map(enrichMessage).reverse());
 });
 
 // ── POST /api/messages/conversations/:id/send ───────────────────────────────
 
+function validateReplyTo(replyToRaw: unknown, convId: number): number | null | { error: string } {
+  if (replyToRaw === undefined || replyToRaw === null || replyToRaw === '') return null;
+  const replyId = Number(replyToRaw);
+  if (!Number.isFinite(replyId) || replyId <= 0) return { error: 'Invalid reply_to' };
+  const original = db.prepare(
+    'SELECT id FROM messages WHERE id = ? AND conversation_id = ?'
+  ).get(replyId, convId);
+  if (!original) return { error: 'Replied-to message not found in this conversation' };
+  return replyId;
+}
+
 router.post('/conversations/:id/send', (req: AuthRequest, res: Response): void => {
   const userId = req.user!.id;
   const convId = parseInt(req.params.id);
-  const { content } = req.body;
+  const { content, reply_to } = req.body;
 
   if (!content?.trim()) { res.status(400).json({ error: 'Content required' }); return; }
   if (!canAccessConversation(userId, convId)) {
     res.status(403).json({ error: 'Access denied' }); return;
   }
 
+  const replyId = validateReplyTo(reply_to, convId);
+  if (replyId && typeof replyId === 'object') { res.status(400).json({ error: replyId.error }); return; }
+
   const result = db.prepare(
-    'INSERT INTO messages (conversation_id, user_id, content) VALUES (?, ?, ?)'
-  ).run(convId, userId, content.trim());
+    'INSERT INTO messages (conversation_id, user_id, content, reply_to_message_id) VALUES (?, ?, ?, ?)'
+  ).run(convId, userId, content.trim(), replyId);
 
-  const message = db.prepare(`
-    SELECT m.id, m.conversation_id, m.user_id, m.content, m.is_deleted, m.created_at, m.updated_at,
-           m.attachment_filename, m.attachment_original, m.attachment_size, m.attachment_mime,
-           u.username, u.display_name, u.avatar_url
-    FROM messages m JOIN users u ON u.id = m.user_id
-    WHERE m.id = ?
-  `).get(result.lastInsertRowid) as any;
+  const message = enrichMessage(
+    db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(result.lastInsertRowid)
+  );
 
-  // Emit to all conversation members' personal user rooms (works regardless of page)
-  emitToConversationMembers(convId, 'new_message', message);
-
+  broadcastMessage(convId, message);
   res.status(201).json(message);
 });
 
@@ -332,21 +409,24 @@ router.post('/conversations/:id/upload', chatUpload.single('file'), (req: AuthRe
     return;
   }
 
+  const replyId = validateReplyTo(req.body.reply_to, convId);
+  if (replyId && typeof replyId === 'object') {
+    deleteChatFile(file.filename);
+    res.status(400).json({ error: replyId.error });
+    return;
+  }
+
   const result = db.prepare(`
     INSERT INTO messages
-      (conversation_id, user_id, content, attachment_filename, attachment_original, attachment_size, attachment_mime)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(convId, userId, text, file.filename, file.originalname, file.size, file.mimetype);
+      (conversation_id, user_id, content, attachment_filename, attachment_original, attachment_size, attachment_mime, reply_to_message_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(convId, userId, text, file.filename, file.originalname, file.size, file.mimetype, replyId);
 
-  const message = db.prepare(`
-    SELECT m.id, m.conversation_id, m.user_id, m.content, m.is_deleted, m.created_at, m.updated_at,
-           m.attachment_filename, m.attachment_original, m.attachment_size, m.attachment_mime,
-           u.username, u.display_name, u.avatar_url
-    FROM messages m JOIN users u ON u.id = m.user_id
-    WHERE m.id = ?
-  `).get(result.lastInsertRowid) as any;
+  const message = enrichMessage(
+    db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(result.lastInsertRowid)
+  );
 
-  emitToConversationMembers(convId, 'new_message', message);
+  broadcastMessage(convId, message);
   res.status(201).json(message);
 });
 
@@ -425,7 +505,36 @@ router.patch('/conversations/:id/read', (req: AuthRequest, res: Response): void 
     ON CONFLICT(conversation_id, user_id) DO UPDATE SET last_read_message_id = excluded.last_read_message_id
   `).run(convId, userId, lastMsg.id);
 
+  // Notify other members so they can update read receipts in real time
+  emitToConversationMembers(convId, 'conversation_read', {
+    conversationId: convId,
+    userId,
+    lastReadId: lastMsg.id
+  });
+
   res.json({ ok: true });
+});
+
+// ── PATCH /api/messages/conversations/:id/mute ──────────────────────────────
+
+router.patch('/conversations/:id/mute', (req: AuthRequest, res: Response): void => {
+  const userId = req.user!.id;
+  const convId = parseInt(req.params.id);
+  const { muted } = req.body;
+
+  if (!canAccessConversation(userId, convId)) {
+    res.status(403).json({ error: 'Access denied' }); return;
+  }
+
+  const isMuted = muted ? 1 : 0;
+
+  db.prepare(`
+    INSERT INTO conversation_reads (conversation_id, user_id, last_read_message_id, is_muted)
+    VALUES (?, ?, 0, ?)
+    ON CONFLICT(conversation_id, user_id) DO UPDATE SET is_muted = excluded.is_muted
+  `).run(convId, userId, isMuted);
+
+  res.json({ ok: true, is_muted: !!isMuted });
 });
 
 export default router;

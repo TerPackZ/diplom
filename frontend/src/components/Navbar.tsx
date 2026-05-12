@@ -3,6 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../context/ThemeContext';
 import { useSocket } from '../context/SocketContext';
+import { useToast } from '../context/ToastContext';
+import { useNotifications } from '../context/NotificationsContext';
 import Avatar from './Avatar';
 import NotificationPanel from './NotificationPanel';
 import apiClient from '../api/client';
@@ -11,6 +13,8 @@ export default function Navbar() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { socket } = useSocket();
+  const toast = useToast();
+  const { permission, request, showBrowser } = useNotifications();
   const navigate = useNavigate();
   const location = useLocation();
   const [pendingCount, setPendingCount] = useState(0);
@@ -50,12 +54,81 @@ export default function Navbar() {
   // Real-time: new notification (friend request) → bump pending count
   useEffect(() => {
     if (!socket) return;
-    const handler = (notif: { type: string }) => {
+    const handler = (notif: { type: string; title?: string; body?: string }) => {
       if (notif.type === 'friend_request') setPendingCount(prev => prev + 1);
+      // Pop-up + browser notification for any new notification (when not focused)
+      if (notif.title) {
+        showBrowser({
+          title: notif.title,
+          body: notif.body,
+          tag: `notif-${notif.type}-${Date.now()}`
+        });
+        if (!document.hidden) {
+          toast.show(notif.body || '', {
+            type: 'info',
+            title: notif.title,
+            duration: 5000
+          });
+        }
+      }
     };
     socket.on('new_notification', handler);
     return () => { socket.off('new_notification', handler); };
-  }, [socket]);
+  }, [socket, toast, showBrowser]);
+
+  // Real-time: chat pop-ups (browser + in-app toast, with click-to-navigate)
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (msg: {
+      conversation_id: number;
+      user_id: number;
+      content: string;
+      display_name: string | null;
+      username: string;
+      avatar_url: string | null;
+      attachment_filename: string | null;
+      attachment_original: string | null;
+    }) => {
+      if (msg.user_id === user?.id) return;
+      const senderName = msg.display_name || msg.username;
+      const preview = msg.attachment_filename
+        ? `📎 ${msg.attachment_original ?? 'файл'}`
+        : msg.content;
+      const goToChat = () => navigate(`/messages?conv=${msg.conversation_id}`);
+
+      // Browser notification — only fires if tab is hidden (handled inside showBrowser)
+      showBrowser({
+        title: senderName,
+        body: preview,
+        icon: msg.avatar_url ? window.location.origin + msg.avatar_url : undefined,
+        tag: `conv-${msg.conversation_id}`,
+        onClick: goToChat
+      });
+
+      // In-app toast — only when tab is visible AND user is not already on /messages
+      if (!document.hidden && location.pathname !== '/messages') {
+        toast.show(preview, {
+          type: 'info',
+          title: senderName,
+          avatarSrc: msg.avatar_url,
+          avatarName: senderName,
+          onClick: goToChat,
+          duration: 5000
+        });
+      }
+    };
+    socket.on('chat_notification', handler);
+    return () => { socket.off('chat_notification', handler); };
+  }, [socket, user?.id, navigate, toast, showBrowser, location.pathname]);
+
+  // Ask for browser notification permission once when user logs in
+  useEffect(() => {
+    if (!user) return;
+    if (permission === 'default') {
+      const timer = setTimeout(() => { request(); }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [user, permission, request]);
 
   // When user accepts/declines a request from FriendsPage, refresh count
   useEffect(() => {

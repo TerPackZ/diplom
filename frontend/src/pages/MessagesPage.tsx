@@ -40,6 +40,19 @@ interface Conversation {
   member_count?: number;
   last_message: LastMessage | null;
   unread_count: number;
+  is_muted: boolean;
+  other_last_read_id: number;
+}
+
+interface ReplyInfo {
+  id: number;
+  content: string;
+  user_id: number;
+  is_deleted: number;
+  attachment_original: string | null;
+  attachment_mime: string | null;
+  username: string;
+  display_name: string | null;
 }
 
 interface Message {
@@ -57,6 +70,8 @@ interface Message {
   attachment_original: string | null;
   attachment_size: number | null;
   attachment_mime: string | null;
+  reply_to_message_id: number | null;
+  reply_to: ReplyInfo | null;
 }
 
 interface Friend {
@@ -296,6 +311,8 @@ export default function MessagesPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [flashMsgId, setFlashMsgId] = useState<number | null>(null);
 
   // ── Load conversations ──
 
@@ -411,16 +428,29 @@ export default function MessagesPage() {
       setTypingUsers(prev => { const m = new Map(prev); m.delete(userId); return m; });
     };
 
+    const handleConversationRead = ({ conversationId, userId: readerId, lastReadId }: {
+      conversationId: number; userId: number; lastReadId: number;
+    }) => {
+      if (readerId === user?.id) return;
+      setConversations(prev => prev.map(c =>
+        c.id === conversationId
+          ? { ...c, other_last_read_id: Math.max(c.other_last_read_id || 0, lastReadId) }
+          : c
+      ));
+    };
+
     socket.on('new_message', handleNewMessage);
     socket.on('message_deleted', handleMessageDeleted);
     socket.on('user_typing', handleUserTyping);
     socket.on('user_stop_typing', handleUserStopTyping);
+    socket.on('conversation_read', handleConversationRead);
 
     return () => {
       socket.off('new_message', handleNewMessage);
       socket.off('message_deleted', handleMessageDeleted);
       socket.off('user_typing', handleUserTyping);
       socket.off('user_stop_typing', handleUserStopTyping);
+      socket.off('conversation_read', handleConversationRead);
     };
   }, [socket, activeConvId, user?.id, loadConversations]);
 
@@ -447,6 +477,8 @@ export default function MessagesPage() {
     setInputValue('');
     const fileToSend = pendingFile;
     setPendingFile(null);
+    const replyId = replyTo?.id ?? null;
+    setReplyTo(null);
     setSending(true);
     isTyping.current = false;
 
@@ -456,6 +488,7 @@ export default function MessagesPage() {
         const form = new FormData();
         form.append('file', fileToSend);
         if (content) form.append('content', content);
+        if (replyId) form.append('reply_to', String(replyId));
         const res = await apiClient.post(
           `/api/messages/conversations/${activeConvId}/upload`,
           form,
@@ -463,7 +496,10 @@ export default function MessagesPage() {
         );
         sent = res.data;
       } else {
-        const res = await apiClient.post(`/api/messages/conversations/${activeConvId}/send`, { content });
+        const res = await apiClient.post(`/api/messages/conversations/${activeConvId}/send`, {
+          content,
+          reply_to: replyId
+        });
         sent = res.data;
       }
 
@@ -489,10 +525,15 @@ export default function MessagesPage() {
     } catch {
       setInputValue(content);
       setPendingFile(fileToSend);
+      if (replyId) {
+        // restore replyTo from the message we just had
+        const restored = messages.find(m => m.id === replyId);
+        if (restored) setReplyTo(restored);
+      }
     } finally {
       setSending(false);
     }
-  }, [inputValue, activeConvId, sending, pendingFile]);
+  }, [inputValue, activeConvId, sending, pendingFile, replyTo, messages]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -500,6 +541,59 @@ export default function MessagesPage() {
       sendMessage();
     }
   };
+
+  // Paste images from clipboard
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (!file) continue;
+        if (file.size > 25 * 1024 * 1024) {
+          toast.show('Картинка слишком большая (макс 25 МБ)', 'error');
+          return;
+        }
+        e.preventDefault();
+        const ext = item.type.split('/')[1] || 'png';
+        const renamed = new File([file], `pasted-${Date.now()}.${ext}`, { type: item.type });
+        setPendingFile(renamed);
+        return;
+      }
+    }
+  };
+
+  // Scroll to a message and flash it briefly
+  const scrollToMessage = useCallback((messageId: number) => {
+    const el = document.getElementById(`msg-${messageId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setFlashMsgId(messageId);
+    setTimeout(() => setFlashMsgId(prev => prev === messageId ? null : prev), 1600);
+  }, []);
+
+  // Start replying to a message
+  const startReply = useCallback((msg: Message) => {
+    setReplyTo(msg);
+    inputRef.current?.focus();
+  }, []);
+
+  // Toggle mute for the active conversation
+  const toggleMute = useCallback(async () => {
+    if (!activeConvId) return;
+    const cur = conversations.find(c => c.id === activeConvId);
+    if (!cur) return;
+    const next = !cur.is_muted;
+    setConversations(prev => prev.map(c => c.id === activeConvId ? { ...c, is_muted: next } : c));
+    try {
+      await apiClient.patch(`/api/messages/conversations/${activeConvId}/mute`, { muted: next });
+      toast.show(next ? 'Чат отключён' : 'Уведомления чата включены', next ? 'info' : 'success');
+    } catch {
+      // revert
+      setConversations(prev => prev.map(c => c.id === activeConvId ? { ...c, is_muted: !next } : c));
+      toast.show('Не удалось изменить настройку', 'error');
+    }
+  }, [activeConvId, conversations, toast]);
 
   // ── Typing indicator ──
 
@@ -583,7 +677,8 @@ export default function MessagesPage() {
       result.push(
         <div
           key={msg.id}
-          className={`chat-msg ${isOwn ? 'chat-msg--own' : 'chat-msg--other'}`}
+          id={`msg-${msg.id}`}
+          className={`chat-msg ${isOwn ? 'chat-msg--own' : 'chat-msg--other'} ${flashMsgId === msg.id ? 'chat-msg--flash' : ''}`}
         >
           {!isOwn && (
             <div className="chat-msg__avatar">
@@ -598,21 +693,74 @@ export default function MessagesPage() {
               <div className="chat-msg__name">{msg.display_name || msg.username}</div>
             )}
             <div className={`chat-msg__bubble ${msg.is_deleted ? 'chat-msg__bubble--deleted' : ''}`}>
+              {!msg.is_deleted && msg.reply_to && (
+                <div
+                  className="chat-msg__quote"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    scrollToMessage(msg.reply_to!.id);
+                  }}
+                >
+                  <span className="chat-msg__quote-author">
+                    {msg.reply_to.display_name || msg.reply_to.username}
+                  </span>
+                  <span className="chat-msg__quote-text">
+                    {msg.reply_to.is_deleted
+                      ? 'Сообщение удалено'
+                      : msg.reply_to.attachment_original
+                        ? `📎 ${msg.reply_to.attachment_original}`
+                        : msg.reply_to.content}
+                  </span>
+                </div>
+              )}
               {!msg.is_deleted && msg.attachment_filename && (
                 <MessageAttachment msg={msg} />
               )}
               {msg.content && <span className="chat-msg__text">{msg.content}</span>}
-              <span className="chat-msg__time">{formatTime(msg.created_at)}</span>
-              {!msg.is_deleted && isOwn && (
-                <button
-                  className="chat-msg__del"
-                  onClick={() => deleteMessage(msg.id)}
-                  title="Удалить"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                  </svg>
-                </button>
+              <span className="chat-msg__time">
+                {formatTime(msg.created_at)}
+                {isOwn && !msg.is_deleted && activeConv?.type === 'direct' && (
+                  <span
+                    className={`chat-msg__receipt ${msg.id <= (activeConv.other_last_read_id || 0) ? 'chat-msg__receipt--read' : ''}`}
+                    title={msg.id <= (activeConv.other_last_read_id || 0) ? 'Прочитано' : 'Доставлено'}
+                  >
+                    {msg.id <= (activeConv.other_last_read_id || 0) ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="18 6 7 17 2 12"/>
+                        <polyline points="22 10 13 19 11.5 17.5"/>
+                      </svg>
+                    ) : (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12"/>
+                      </svg>
+                    )}
+                  </span>
+                )}
+              </span>
+              {!msg.is_deleted && (
+                <div className="chat-msg__actions">
+                  <button
+                    className="chat-msg__action"
+                    onClick={(e) => { e.stopPropagation(); startReply(msg); }}
+                    title="Ответить"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="9 17 4 12 9 7"/>
+                      <path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
+                    </svg>
+                  </button>
+                  {isOwn && (
+                    <button
+                      className="chat-msg__action chat-msg__action--danger"
+                      onClick={(e) => { e.stopPropagation(); deleteMessage(msg.id); }}
+                      title="Удалить"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -677,7 +825,20 @@ export default function MessagesPage() {
                     </div>
                     <div className="chat-conv-row__info">
                       <div className="chat-conv-row__top">
-                        <span className="chat-conv-row__name">{convName(conv)}</span>
+                        <span className="chat-conv-row__name">
+                          {convName(conv)}
+                          {conv.is_muted && (
+                            <span className="chat-conv-row__mute" title="Без уведомлений">
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                                <path d="M18.63 13A17.89 17.89 0 0 1 18 8"/>
+                                <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/>
+                                <path d="M18 8a6 6 0 0 0-9.33-5"/>
+                                <line x1="1" y1="1" x2="23" y2="23"/>
+                              </svg>
+                            </span>
+                          )}
+                        </span>
                         {conv.last_message && (
                           <span className="chat-conv-row__time">
                             {formatTime(conv.last_message.created_at)}
@@ -725,7 +886,20 @@ export default function MessagesPage() {
                   showStatus={activeConv.type === 'direct'}
                 />
                 <div className="chat-window__header-info">
-                  <div className="chat-window__header-name">{convName(activeConv)}</div>
+                  <div className="chat-window__header-name">
+                    {convName(activeConv)}
+                    {activeConv.is_muted && (
+                      <span className="chat-window__muted-icon" title="Уведомления отключены">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                          <path d="M18.63 13A17.89 17.89 0 0 1 18 8"/>
+                          <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/>
+                          <path d="M18 8a6 6 0 0 0-9.33-5"/>
+                          <line x1="1" y1="1" x2="23" y2="23"/>
+                        </svg>
+                      </span>
+                    )}
+                  </div>
                   <div className="chat-window__header-sub">
                     {activeConv.type === 'group'
                       ? `${activeConv.member_count ?? 0} участников`
@@ -733,6 +907,28 @@ export default function MessagesPage() {
                     }
                   </div>
                 </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-icon chat-window__action"
+                  onClick={toggleMute}
+                  title={activeConv.is_muted ? 'Включить уведомления' : 'Отключить уведомления'}
+                  aria-label="Mute"
+                >
+                  {activeConv.is_muted ? (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                      <path d="M18.63 13A17.89 17.89 0 0 1 18 8"/>
+                      <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/>
+                      <path d="M18 8a6 6 0 0 0-9.33-5"/>
+                      <line x1="1" y1="1" x2="23" y2="23"/>
+                    </svg>
+                  ) : (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                      <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                    </svg>
+                  )}
+                </button>
               </div>
 
               <div className="chat-messages">
@@ -761,6 +957,38 @@ export default function MessagesPage() {
               </div>
 
               <div className="chat-input-wrap">
+                {replyTo && (
+                  <div className="chat-reply-bar">
+                    <span className="chat-reply-bar__icon">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 17 4 12 9 7"/>
+                        <path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
+                      </svg>
+                    </span>
+                    <div className="chat-reply-bar__body">
+                      <div className="chat-reply-bar__title">
+                        Ответ {replyTo.user_id === user?.id
+                          ? 'себе'
+                          : replyTo.display_name || replyTo.username}
+                      </div>
+                      <div className="chat-reply-bar__preview">
+                        {replyTo.attachment_original
+                          ? `📎 ${replyTo.attachment_original}`
+                          : replyTo.content}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="chat-reply-bar__close"
+                      onClick={() => setReplyTo(null)}
+                      title="Отменить ответ"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                    </button>
+                  </div>
+                )}
                 {pendingFile && (
                   <div className="chat-pending-file">
                     <span className="chat-pending-file__icon">
@@ -813,10 +1041,11 @@ export default function MessagesPage() {
                   <textarea
                     ref={inputRef}
                     className="chat-input"
-                    placeholder={pendingFile ? 'Подпись к файлу (необязательно)' : 'Написать сообщение... (Enter — отправить, Shift+Enter — новая строка)'}
+                    placeholder={pendingFile ? 'Подпись к файлу (необязательно)' : 'Написать сообщение... (Enter — отправить, Shift+Enter — новая строка, Ctrl+V — вставить картинку)'}
                     value={inputValue}
                     onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
                     rows={1}
                   />
                   <button

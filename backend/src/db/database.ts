@@ -199,6 +199,16 @@ if (!messagesCols.some(c => c.name === 'attachment_filename')) {
   db.exec('ALTER TABLE messages ADD COLUMN attachment_mime TEXT');
 }
 
+if (!messagesCols.some(c => c.name === 'reply_to_message_id')) {
+  db.exec('ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL');
+}
+
+// Mute per (conversation, user)
+const readsCols = db.prepare("PRAGMA table_info(conversation_reads)").all() as { name: string }[];
+if (!readsCols.some(c => c.name === 'is_muted')) {
+  db.exec('ALTER TABLE conversation_reads ADD COLUMN is_muted INTEGER NOT NULL DEFAULT 0');
+}
+
 // Backfill: default columns for groups that don't have any yet
 db.exec(`
   INSERT INTO board_columns (group_id, name, position, color, is_completion)
